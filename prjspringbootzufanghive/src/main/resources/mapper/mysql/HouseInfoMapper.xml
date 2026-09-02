@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lgcollege.mapper.mysql.HouseInfoMapper">
+
+    <resultMap id="HouseInfoResultMap" type="com.lgcollege.entity.mysql.HouseInfo">
+        <id property="id" column="id"/>
+        <result property="sourceRecordId" column="source_record_id"/>
+        <result property="title" column="title"/>
+        <result property="city" column="city"/>
+        <result property="district" column="district"/>
+        <result property="community" column="community"/>
+        <result property="address" column="address"/>
+        <result property="totalPrice" column="total_price"/>
+        <result property="unitPrice" column="unit_price"/>
+        <result property="area" column="area"/>
+        <result property="bedroomCount" column="bedroom_count"/>
+        <result property="livingRoomCount" column="living_room_count"/>
+        <result property="layout" column="layout"/>
+        <result property="orientation" column="orientation"/>
+        <result property="floorDescription" column="floor_description"/>
+        <result property="floorLevel" column="floor_level"/>
+        <result property="totalFloors" column="total_floors"/>
+        <result property="decoration" column="decoration"/>
+        <result property="surroundingDescription" column="surrounding_description"/>
+        <result property="listingDate" column="listing_date"/>
+        <result property="dataSource" column="data_source"/>
+        <result property="importTaskId" column="import_task_id"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+        <result property="deleted" column="deleted"/>
+    </resultMap>
+
+    <sql id="HouseColumns">
+        id, source_record_id, title, city, district, community, address,
+        total_price, unit_price, area, bedroom_count, living_room_count,
+        layout, orientation, floor_description, floor_level, total_floors,
+        decoration, surrounding_description, listing_date, data_source,
+        import_task_id, created_at, updated_at, deleted
+    </sql>
+
+    <sql id="QueryConditions">
+        deleted = 0
+        <if test="query.city != null and query.city != ''">
+            AND city = #{query.city}
+        </if>
+        <if test="query.district != null and query.district != ''">
+            AND district = #{query.district}
+        </if>
+        <if test="query.community != null and query.community != ''">
+            AND community = #{query.community}
+        </if>
+        <if test="query.minUnitPrice != null">
+            AND unit_price <![CDATA[>=]]> #{query.minUnitPrice}
+        </if>
+        <if test="query.maxUnitPrice != null">
+            AND unit_price <![CDATA[<=]]> #{query.maxUnitPrice}
+        </if>
+        <if test="query.minTotalPrice != null">
+            AND total_price <![CDATA[>=]]> #{query.minTotalPrice}
+        </if>
+        <if test="query.maxTotalPrice != null">
+            AND total_price <![CDATA[<=]]> #{query.maxTotalPrice}
+        </if>
+        <if test="query.minArea != null">
+            AND area <![CDATA[>=]]> #{query.minArea}
+        </if>
+        <if test="query.maxArea != null">
+            AND area <![CDATA[<=]]> #{query.maxArea}
+        </if>
+        <if test="query.layout != null and query.layout != ''">
+            AND layout = #{query.layout}
+        </if>
+        <if test="query.orientation != null and query.orientation != ''">
+            AND orientation = #{query.orientation}
+        </if>
+        <if test="query.decoration != null and query.decoration != ''">
+            AND decoration = #{query.decoration}
+        </if>
+    </sql>
+
+    <insert id="insert" parameterType="com.lgcollege.entity.mysql.HouseInfo"
+            useGeneratedKeys="true" keyProperty="id" keyColumn="id">
+        INSERT INTO house_info (
+            source_record_id, title, city, district, community, address,
+            total_price, unit_price, area, bedroom_count, living_room_count,
+            layout, orientation, floor_description, floor_level, total_floors,
+            decoration, surrounding_description, listing_date, data_source,
+            import_task_id, deleted
+        ) VALUES (
+            #{sourceRecordId}, #{title}, #{city}, #{district}, #{community}, #{address},
+            #{totalPrice}, #{unitPrice}, #{area}, #{bedroomCount}, #{livingRoomCount},
+            #{layout}, #{orientation}, #{floorDescription}, #{floorLevel}, #{totalFloors},
+            #{decoration}, #{surroundingDescription}, #{listingDate}, #{dataSource},
+            #{importTaskId}, 0
+        )
+    </insert>
+
+    <select id="findById" resultMap="HouseInfoResultMap">
+        SELECT <include refid="HouseColumns"/>
+        FROM house_info
+        WHERE id = #{id}
+          AND deleted = 0
+    </select>
+
+    <update id="update" parameterType="com.lgcollege.entity.mysql.HouseInfo">
+        UPDATE house_info
+        SET source_record_id = #{sourceRecordId},
+            title = #{title},
+            city = #{city},
+            district = #{district},
+            community = #{community},
+            address = #{address},
+            total_price = #{totalPrice},
+            unit_price = #{unitPrice},
+            area = #{area},
+            bedroom_count = #{bedroomCount},
+            living_room_count = #{livingRoomCount},
+            layout = #{layout},
+            orientation = #{orientation},
+            floor_description = #{floorDescription},
+            floor_level = #{floorLevel},
+            total_floors = #{totalFloors},
+            decoration = #{decoration},
+            surrounding_description = #{surroundingDescription},
+            listing_date = #{listingDate},
+            data_source = #{dataSource},
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = #{id}
+          AND deleted = 0
+    </update>
+
+    <update id="softDelete">
+        UPDATE house_info
+        SET deleted = 1,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = #{id}
+          AND deleted = 0
+    </update>
+
+    <select id="count" resultType="long">
+        SELECT COUNT(*)
+        FROM house_info
+        WHERE <include refid="QueryConditions"/>
+    </select>
+
+    <select id="findPage" resultMap="HouseInfoResultMap">
+        SELECT <include refid="HouseColumns"/>
+        FROM house_info
+        WHERE <include refid="QueryConditions"/>
+        ORDER BY id DESC
+        LIMIT #{offset}, #{pageSize}
+    </select>
+</mapper>

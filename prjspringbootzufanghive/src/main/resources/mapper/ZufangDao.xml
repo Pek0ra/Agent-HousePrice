@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lgcollege.dao.ZufangDao">
+
+    <resultMap id="BaseResultMap" type="com.lgcollege.entity.Zufang">
+        <!--@Table zufang-->
+        <result property="zid" column="zid" jdbcType="INTEGER"/>
+        <result property="address" column="address" jdbcType="VARCHAR"/>
+        <result property="huanjing" column="huanjing" jdbcType="VARCHAR"/>
+        <result property="jiage" column="jiage" jdbcType="VARCHAR"/>
+        <result property="louceng" column="louceng" jdbcType="VARCHAR"/>
+        <result property="mianji" column="mianji" jdbcType="INTEGER"/>
+        <result property="shi" column="shi" jdbcType="INTEGER"/>
+        <result property="ting" column="ting" jdbcType="INTEGER"/>
+        <result property="title" column="title" jdbcType="VARCHAR"/>
+        <result property="xqname" column="xqname" jdbcType="VARCHAR"/>
+    </resultMap>
+
+    <!--查询单个-->
+    <select id="queryById" resultMap="BaseResultMap">
+        select
+abs(zid), address, huanjing, jiage, louceng, mianji, shi, ting, title, xqname
+        from zufang
+        where  abs(zid)= #{id}
+    </select>
+
+    <!--查询指定行数据-->
+    <select id="queryAllByLimit" resultMap="BaseResultMap">
+        select
+            abs(zid) as zid, address, huanjing, jiage, louceng, mianji, shi, ting, title, xqname
+        from zufang
+        <where>
+            <if test="zf!=null">
+                <if test="zf.xqname != null and zf.xqname != ''">
+                    and xqname = #{zf.xqname}
+                </if>
+            </if>
+        </where>
+        order by abs(zid)
+        limit #{pageable.offset}, #{pageable.pageSize}
+    </select>
+
+    <!--通过实体作为筛选条件查询-->
+    <select id="queryAll" resultMap="BaseResultMap">
+        select
+    abs(zid), address, huanjing, jiage, louceng, mianji, shi, ting, title, xqname
+        from mydb.zufang
+    </select>    
+    <!--统计总行数-->
+    <select id="count" resultType="java.lang.Long">
+        select count(1)
+        from zufang
+        <where>
+            <if test="zf!=null">
+                <if test="zf.xqname != null and zf.xqname != ''">
+                    and xqname = #{zf.xqname}
+                </if>
+            </if>
+        </where>
+    </select>
+    <select id="findBar" resultType="java.util.Map">
+        Select xqname,round(avg(jiage)) as avgprice  from zufang group  by xqname
+
+    </select>
+
+    <!--新增所有列-->
+    <insert id="insert" keyProperty="" useGeneratedKeys="true">
+        insert into zufang(zid, address, huanjing, jiage, louceng, mianji, shi, ting, title, xqname)
+        values (#{zid}, #{address}, #{huanjing}, #{jiage}, #{louceng}, #{mianji}, #{shi}, #{ting}, #{title}, #{xqname})
+    </insert>
+
+    <insert id="insertBatch" keyProperty="" useGeneratedKeys="true">
+        insert into zufang(zid, address, huanjing, jiage, louceng, mianji, shi, ting, title, xqname)
+        values
+        <foreach collection="entities" item="entity" separator=",">
+        (#{entity.zid}, #{entity.address}, #{entity.huanjing}, #{entity.jiage}, #{entity.louceng}, #{entity.mianji}, #{entity.shi}, #{entity.ting}, #{entity.title}, #{entity.xqname})
+        </foreach>
+    </insert>
+
+    <insert id="insertOrUpdateBatch" keyProperty="" useGeneratedKeys="true">
+        insert into zufang(zid, address, huanjing, jiage, louceng, mianji, shi, ting, title, xqname)
+        values
+        <foreach collection="entities" item="entity" separator=",">
+            (#{entity.zid}, #{entity.address}, #{entity.huanjing}, #{entity.jiage}, #{entity.louceng}, #{entity.mianji}, #{entity.shi}, #{entity.ting}, #{entity.title}, #{entity.xqname})
+        </foreach>
+        on duplicate key update
+zid = values(zid),
+address = values(address),
+huanjing = values(huanjing),
+jiage = values(jiage),
+louceng = values(louceng),
+mianji = values(mianji),
+shi = values(shi),
+ting = values(ting),
+title = values(title),
+xqname = values(xqname)
+    </insert>
+
+
+
+</mapper>
+

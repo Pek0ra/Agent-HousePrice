@@ -1,0 +1,71 @@
+name: agent-house-price
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: agent-house-price-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
+      MYSQL_DATABASE: house_price
+      TZ: Asia/Shanghai
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./infra/mysql/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'MYSQL_PWD="$${MYSQL_ROOT_PASSWORD}" mysqladmin ping --protocol=tcp -h 127.0.0.1 -uroot --silent'
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  java-backend:
+    build:
+      context: ./prjspringbootzufanghive
+      dockerfile: Dockerfile
+      args:
+        MAVEN_PROFILE: ${JAVA_MAVEN_PROFILE:-local}
+    image: agent-house-price-java-backend:local
+    container_name: agent-house-price-java-backend
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-local}
+      BIG_DATA_ENABLED: ${BIG_DATA_ENABLED:-false}
+      MYSQL_URL: jdbc:mysql://mysql:3306/house_price?useUnicode=true&characterEncoding=UTF-8&connectionCollation=utf8mb4_0900_ai_ci&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+      MYSQL_USERNAME: ${MYSQL_USERNAME:-root}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
+      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=75.0 -Dfile.encoding=UTF-8}
+      TZ: Asia/Shanghai
+    ports:
+      - "${JAVA_PORT:-9900}:9900"
+    volumes:
+      - java_data:/app/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'curl --fail --silent --show-error http://127.0.0.1:9900/actuator/health | grep -q ''"status":"UP"'''
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  mysql_data:
+    name: agent-house-price-mysql-data
+  java_data:
+    name: agent-house-price-java-data

@@ -1,0 +1,61 @@
+<script>
+        //建立一個可存取到該file的url
+        function getObjectURL(file) {
+            var url = null ;
+            if (window.createObjectURL!=undefined) { // basic
+                url = window.createObjectURL(file) ;
+            } else if (window.URL!=undefined) { // mozilla(firefox)
+                url = window.URL.createObjectURL(file) ;
+            } else if (window.webkitURL!=undefined) { // webkit or chrome
+                url = window.webkitURL.createObjectURL(file) ;
+            }
+            return url ;
+        }
+    </script>
+
+<form>
+<img id="image0" src="uppic/default.jpg" width="200" height="280">
+    <input type="text" value="" v-model="name" placeholder="请输入用户名">
+    <input type="text" value="" v-model="age" placeholder="请输入年龄">
+    <input type="file" @change="getFile($event)">
+    <button @click="submitForm($event)">提交</button>
+</form>
+
+    data: {
+          name: '',
+          age: '',
+          file: ''
+        },
+        methods: {
+           getFile(event) {
+                          this.file = event.target.files[0];
+                          console.log(this.file);
+                          //将获取的图片设置到显示预览图片位置===========
+                          var objUrl=getObjectURL(this.file);
+                          console.log("objUrl="+objUrl);
+                          if(objUrl){
+                              $("#image0").attr("src",objUrl);
+                          }
+                          //==========================================
+
+                      },
+          submitForm(event) {
+            event.preventDefault();
+            let formData = new FormData();
+            formData.append('name', this.name);
+            formData.append('age', this.age);
+            formData.append('file', this.file);
+
+            let config = {
+              headers: {
+                'Content-Type': 'multipart/form-data'
+              }
+            }
+
+            this.$http.post('http://127.0.0.1:8081/upload', formData, config).then(function (response) {
+              if (response.status === 200) {
+                console.log(response.data);
+              }
+            })
+          }
+        }

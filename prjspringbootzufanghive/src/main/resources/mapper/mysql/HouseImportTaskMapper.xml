@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lgcollege.mapper.mysql.HouseImportTaskMapper">
+
+    <resultMap id="ImportTaskResultMap"
+               type="com.lgcollege.entity.mysql.HouseImportTask">
+        <id property="id" column="id"/>
+        <result property="originalFilename" column="original_filename"/>
+        <result property="fileSize" column="file_size"/>
+        <result property="fileSha256" column="file_sha256"/>
+        <result property="status" column="status"
+                javaType="com.lgcollege.entity.mysql.ImportTaskStatus"/>
+        <result property="totalRows" column="total_rows"/>
+        <result property="successRows" column="success_rows"/>
+        <result property="failedRows" column="failed_rows"/>
+        <result property="hdfsPath" column="hdfs_path"/>
+        <result property="errorReportPath" column="error_report_path"/>
+        <result property="failureStage" column="failure_stage"
+                javaType="com.lgcollege.entity.mysql.ImportTaskStatus"/>
+        <result property="retryCount" column="retry_count"/>
+        <result property="stagingPath" column="staging_path"/>
+        <result property="errorMessage" column="error_message"/>
+        <result property="startedAt" column="started_at"/>
+        <result property="finishedAt" column="finished_at"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <sql id="TaskColumns">
+        id, original_filename, file_size, file_sha256, status,
+        total_rows, success_rows, failed_rows, hdfs_path, error_report_path,
+        failure_stage, retry_count, staging_path, error_message,
+        started_at, finished_at, created_at, updated_at
+    </sql>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO house_import_task (
+            original_filename, file_size, file_sha256, status, staging_path, started_at
+        ) VALUES (
+            #{originalFilename}, #{fileSize}, #{fileSha256}, #{status},
+            #{stagingPath}, CURRENT_TIMESTAMP
+        )
+    </insert>
+
+    <select id="findById" resultMap="ImportTaskResultMap">
+        SELECT <include refid="TaskColumns"/>
+        FROM house_import_task
+        WHERE id = #{id}
+    </select>
+
+    <select id="findSuccessfulByHash" resultMap="ImportTaskResultMap">
+        SELECT <include refid="TaskColumns"/>
+        FROM house_import_task
+        WHERE successful_sha256 = #{fileSha256}
+        LIMIT 1
+    </select>
+
+    <update id="transitionStatus">
+        UPDATE house_import_task
+        SET status = #{nextStatus},
+            retry_count = retry_count + CASE WHEN #{incrementRetry} THEN 1 ELSE 0 END,
+            failure_stage = CASE WHEN #{nextStatus} = 'RETRYING'
+                                 THEN failure_stage ELSE NULL END,
+            error_message = CASE WHEN #{nextStatus} = 'RETRYING'
+                                 THEN NULL ELSE error_message END
+        WHERE id = #{id}
+          AND status = #{expectedStatus}
+    </update>
+
+    <update id="updateDetails">
+        UPDATE house_import_task
+        SET
+            total_rows = #{totalRows},
+            success_rows = #{successRows},
+            failed_rows = #{failedRows},
+            hdfs_path = COALESCE(#{hdfsPath}, hdfs_path),
+            error_report_path = COALESCE(#{errorReportPath}, error_report_path),
+            staging_path = COALESCE(#{stagingPath}, staging_path)
+        WHERE id = #{id}
+    </update>
+
+    <update id="markSuccess">
+        UPDATE house_import_task
+        SET status = 'SUCCESS',
+            finished_at = CURRENT_TIMESTAMP,
+            error_message = NULL,
+            failure_stage = NULL,
+            staging_path = NULL
+        WHERE id = #{id}
+          AND status = #{expectedStatus}
+    </update>
+
+    <update id="markFailed">
+        UPDATE house_import_task
+        SET status = 'FAILED',
+            failure_stage = #{failureStage},
+            total_rows = #{totalRows},
+            success_rows = #{successRows},
+            failed_rows = #{failedRows},
+            error_message = #{errorMessage},
+            error_report_path = COALESCE(#{errorReportPath}, error_report_path),
+            finished_at = CURRENT_TIMESTAMP
+        WHERE id = #{id}
+          AND status = #{expectedStatus}
+    </update>
+</mapper>
