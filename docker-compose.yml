@@ -8,6 +8,8 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
       MYSQL_DATABASE: house_price
+      AGENT_MYSQL_PASSWORD: ${AGENT_MYSQL_PASSWORD:-house_agent_change_me}
+      AGENT_AUDIT_MYSQL_PASSWORD: ${AGENT_AUDIT_MYSQL_PASSWORD:-house_agent_audit_change_me}
       TZ: Asia/Shanghai
     ports:
       - "${MYSQL_PORT:-3306}:3306"
@@ -44,6 +46,7 @@ services:
       MYSQL_URL: jdbc:mysql://mysql:3306/house_price?useUnicode=true&characterEncoding=UTF-8&connectionCollation=utf8mb4_0900_ai_ci&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
       MYSQL_USERNAME: ${MYSQL_USERNAME:-root}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
+      AGENT_SERVICE_URL: http://python-agent:8000
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=75.0 -Dfile.encoding=UTF-8}
       TZ: Asia/Shanghai
     ports:
@@ -63,6 +66,71 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  python-agent:
+    build:
+      context: ./agent-service
+      dockerfile: Dockerfile
+    image: agent-house-price-python-agent:local
+    container_name: agent-house-price-python-agent
+    restart: unless-stopped
+    depends_on:
+      mysql-agent-security:
+        condition: service_completed_successfully
+    environment:
+      APP_ENV: ${AGENT_APP_ENV:-local}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4.1-mini}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      CORS_ORIGINS: ${AGENT_CORS_ORIGINS:-http://localhost:9900,http://127.0.0.1:9900}
+      JAVA_BACKEND_URL: http://java-backend:9900
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: house_price
+      MYSQL_USERNAME: house_agent_ro
+      MYSQL_PASSWORD: ${AGENT_MYSQL_PASSWORD:-house_agent_change_me}
+      AUDIT_MYSQL_USERNAME: house_agent_audit
+      AUDIT_MYSQL_PASSWORD: ${AGENT_AUDIT_MYSQL_PASSWORD:-house_agent_audit_change_me}
+      SQL_MAX_ROWS: ${SQL_MAX_ROWS:-100}
+      SQL_EXECUTION_TIMEOUT_MS: ${SQL_EXECUTION_TIMEOUT_MS:-5000}
+      SQL_MAX_REPAIR_ATTEMPTS: ${SQL_MAX_REPAIR_ATTEMPTS:-1}
+      TZ: Asia/Shanghai
+    ports:
+      - "${AGENT_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  mysql-agent-security:
+    image: mysql:8.0
+    container_name: agent-house-price-mysql-agent-security
+    restart: "no"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      java-backend:
+        condition: service_healthy
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
+      AGENT_MYSQL_PASSWORD: ${AGENT_MYSQL_PASSWORD:-house_agent_change_me}
+      AGENT_AUDIT_MYSQL_PASSWORD: ${AGENT_AUDIT_MYSQL_PASSWORD:-house_agent_audit_change_me}
+    volumes:
+      - ./infra/mysql/security/configure-agent-security.sh:/security/configure-agent-security.sh:ro
+    entrypoint:
+      - bash
+      - /security/configure-agent-security.sh
 
 volumes:
   mysql_data:

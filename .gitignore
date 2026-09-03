@@ -1,4 +1,11 @@
 .env
 
+# Python local environments and caches
+.venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.egg-info/
+
 # Local runtime data
 data/

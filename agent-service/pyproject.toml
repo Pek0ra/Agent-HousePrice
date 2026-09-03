@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "house-price-agent-service"
+version = "0.1.0"
+description = "FastAPI service for the house-price intelligent query agent"
+requires-python = ">=3.11,<3.15"
+dependencies = [
+    "fastapi>=0.116,<1.0",
+    "langchain-openai>=1.0,<2.0",
+    "langgraph>=1.0,<2.0",
+    "pymysql>=1.1,<2.0",
+    "python-dotenv>=1.1,<2.0",
+    "sqlalchemy>=2.0,<3.0",
+    "sqlglot>=27.0,<30.0",
+    "uvicorn[standard]>=0.35,<1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "httpx>=0.28,<1.0",
+    "pytest>=8.4,<10.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.setuptools.package-data]
+"app.rag" = ["knowledge/*.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
