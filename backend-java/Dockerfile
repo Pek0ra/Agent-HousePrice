@@ -21,8 +21,12 @@ RUN apt-get update \
 
 WORKDIR /app
 COPY --from=build --chown=spring:spring /workspace/target/prjspringboothive-ver1.0.jar app.jar
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh \
+    && mkdir -p /app/data \
+    && chown -R spring:spring /app/data
 
-USER spring:spring
 EXPOSE 9900
 
-ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["java", "-jar", "/app/app.jar"]

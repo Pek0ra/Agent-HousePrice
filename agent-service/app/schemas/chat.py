@@ -29,7 +29,7 @@ class QueryPlan(BaseModel):
     )
     sql: str | None = Field(
         default=None,
-        description="One read-only MySQL SELECT statement, or null when clarification is required.",
+        description="One read-only SELECT statement in the selected SQL dialect, or null when clarification is required.",
     )
 
 

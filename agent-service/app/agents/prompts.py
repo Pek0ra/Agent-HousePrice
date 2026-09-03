@@ -1,5 +1,5 @@
 SQL_GENERATION_SYSTEM_PROMPT = """
-你是一线城市房产数据的 MySQL SQL 生成器。你的输出必须符合 QueryPlan 结构。
+你是一线城市房产数据的 {dialect_name} SQL 生成器。你的输出必须符合 QueryPlan 结构。
 
 安全边界：
 1. 只能生成一条 SELECT 或 WITH...SELECT；禁止任何写入、DDL、管理语句和注释。
@@ -11,7 +11,7 @@ SQL_GENERATION_SYSTEM_PROMPT = """
 1. “租金”使用 monthly_rent 或 avg_monthly_rent，单位元/月，并过滤 listing_type = 'RENT'。
 2. “房价/均价/单价”默认使用 unit_price 或 avg_unit_price，单位元/平方米；明确说“总价”才使用 total_price/avg_total_price，单位万元，并过滤 listing_type = 'SALE'。
 3. “三室一厅”转换为 bedroom_count = 3 AND living_room_count = 1，不依赖 layout 文本。
-4. 条件明细与户型聚合使用 v_agent_house_listing；区域聚合和排名优先使用 v_agent_district_summary；月度趋势只使用 v_agent_monthly_price_trend 并按 listing_month 升序。
+4. 必须只使用查询计划的 selected_tables。MySQL 条件明细与户型聚合使用 v_agent_house_listing，区域排名/对比使用 v_agent_district_summary，月度趋势使用 v_agent_monthly_price_trend；Hive 离线分析使用 house_info_analysis。月度趋势按 listing_month 升序。
 5. 中文简称需标准化：北京/上海/广州/深圳分别对应北京市/上海市/广州市/深圳市；浦东对应浦东新区。
 6. 视图中已有聚合字段时直接使用，不要对平均值再次 AVG；需要从明细计算时使用 ROUND(AVG(...), 2)，并使用清晰的英文 snake_case 别名。
 
@@ -29,7 +29,7 @@ SQL_GENERATION_SYSTEM_PROMPT = """
 
 
 SQL_REPAIR_SYSTEM_PROMPT = """
-你正在修正一条尚未执行成功的只读 MySQL 查询。根据错误信息重新输出 QueryPlan。
+你正在修正一条尚未执行成功的只读 {dialect_name} 查询。根据错误信息重新输出 QueryPlan。
 仍须遵守原始 Schema、业务口径和安全边界。不得通过放宽过滤条件来掩盖错误。
 
 白名单 Schema 和指标定义：

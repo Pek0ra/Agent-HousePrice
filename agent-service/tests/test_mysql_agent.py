@@ -29,6 +29,14 @@ class FakeDatabase:
         return self.columns, self.rows
 
 
+class FakeHiveDatabase(FakeDatabase):
+    allowed_tables = {"house_info_analysis", "house_data_quality_summary"}
+
+    def describe_allowed_schema(self) -> str:
+        self.schema_load_count += 1
+        return "TABLE house_info_analysis COLUMNS: listing_month STRING, unit_price DECIMAL"
+
+
 class FakeStructuredModel:
     def __init__(self, plans: list[QueryPlan], answer: str = "平均月租金为8500元/月。") -> None:
         self.plans = deque(plans)
@@ -300,3 +308,67 @@ def test_rag_ambiguity_clarifies_before_calling_the_model() -> None:
     assert database.executed_sql is None
     assert model.invoke_count == 0
     assert audit.records[0]["status"] == "CLARIFICATION"
+
+
+def test_bigdata_routes_historical_price_trend_to_hive() -> None:
+    mysql_database = FakeDatabase()
+    hive_database = FakeHiveDatabase(
+        rows=[["2026-01", 65000.0], ["2026-02", 67000.0]],
+        columns=["listing_month", "avg_unit_price"],
+    )
+    model = FakeStructuredModel([
+        QueryPlan(
+            needs_clarification=False,
+            sql=(
+                "SELECT listing_month, AVG(unit_price) AS avg_unit_price "
+                "FROM house_info_analysis WHERE city = '上海市' "
+                "GROUP BY listing_month ORDER BY listing_month"
+            ),
+        )
+    ], answer="上海市历史挂牌单价呈上升趋势。")
+    agent = MysqlNaturalLanguageAgent(
+        Settings(openai_api_key="test-key", big_data_enabled=True),
+        database=mysql_database,
+        hive_database=hive_database,
+        model=model,
+        audit_repository=FakeAuditRepository(),
+    )
+
+    response = agent.ask("上海历史房价的月度趋势如何？")
+
+    assert "house_info_analysis" in (response.sql or "")
+    assert hive_database.executed_sql == response.sql
+    assert mysql_database.schema_load_count == 0
+    assert response.chart is not None and response.chart["type"] == "line"
+    assert "Hive SQL" in model.message_batches[0][0].content
+
+
+def test_bigdata_keeps_historical_rental_trend_on_mysql_without_hive_rental_data() -> None:
+    mysql_database = FakeDatabase(
+        rows=[["2026-01", 8000.0], ["2026-02", 8500.0]],
+        columns=["listing_month", "avg_monthly_rent"],
+    )
+    hive_database = FakeHiveDatabase()
+    model = FakeStructuredModel([
+        QueryPlan(
+            needs_clarification=False,
+            sql=(
+                "SELECT listing_month, avg_monthly_rent "
+                "FROM v_agent_monthly_price_trend "
+                "WHERE city = '上海市' AND listing_type = 'RENT'"
+            ),
+        )
+    ])
+    agent = MysqlNaturalLanguageAgent(
+        Settings(openai_api_key="test-key", big_data_enabled=True),
+        database=mysql_database,
+        hive_database=hive_database,
+        model=model,
+        audit_repository=FakeAuditRepository(),
+    )
+
+    response = agent.ask("上海历史租金月度趋势如何？")
+
+    assert "v_agent_monthly_price_trend" in (response.sql or "")
+    assert mysql_database.executed_sql == response.sql
+    assert hive_database.schema_load_count == 0

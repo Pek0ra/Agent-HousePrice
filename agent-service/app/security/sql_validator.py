@@ -16,9 +16,15 @@ class SqlValidator:
         re.IGNORECASE,
     )
 
-    def __init__(self, allowed_tables: set[str], max_rows: int = 100) -> None:
+    def __init__(
+        self,
+        allowed_tables: set[str],
+        max_rows: int = 100,
+        dialect: str = "mysql",
+    ) -> None:
         self._allowed_tables = {table.lower() for table in allowed_tables}
         self._max_rows = max_rows
+        self._dialect = dialect
 
     def validate_and_normalize(self, sql: str) -> str:
         candidate = sql.strip().rstrip(";").strip()
@@ -28,7 +34,7 @@ class SqlValidator:
             raise UnsafeSqlError("SQL contains a forbidden construct")
 
         try:
-            statements = parse(candidate, read="mysql")
+            statements = parse(candidate, read=self._dialect)
         except ParseError as exc:
             raise UnsafeSqlError(f"SQL cannot be parsed: {exc}") from exc
 
@@ -90,4 +96,4 @@ class SqlValidator:
             if int(limit_expression.this) > self._max_rows:
                 statement.set("limit", exp.Limit(expression=exp.Literal.number(self._max_rows)))
 
-        return statement.sql(dialect="mysql")
+        return statement.sql(dialect=self._dialect)

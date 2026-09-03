@@ -7,6 +7,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    return os.getenv(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _cors_origins() -> tuple[str, ...]:
     raw_origins = os.getenv(
         "CORS_ORIGINS",
@@ -35,6 +39,12 @@ class Settings:
     sql_max_repair_attempts: int = min(
         2, max(0, int(os.getenv("SQL_MAX_REPAIR_ATTEMPTS", "1")))
     )
+    big_data_enabled: bool = _env_bool("BIG_DATA_ENABLED")
+    hive_host: str = os.getenv("HIVE_HOST", "127.0.0.1")
+    hive_port: int = int(os.getenv("HIVE_PORT", "10001"))
+    hive_database: str = os.getenv("HIVE_DATABASE", "mydb")
+    hive_username: str = os.getenv("HIVE_USERNAME", "hive")
+    hive_auth: str = os.getenv("HIVE_AUTH", "NONE")
     cors_origins: tuple[str, ...] = _cors_origins()
 
 

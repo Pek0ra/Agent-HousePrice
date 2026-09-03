@@ -84,12 +84,21 @@ class MysqlNaturalLanguageAgent:
         model: ChatOpenAI | None = None,
         audit_repository: MysqlAuditRepository | None = None,
         knowledge_retriever: MarkdownBusinessKnowledgeRetriever | None = None,
+        hive_database: Any | None = None,
     ) -> None:
         self._settings = settings
         self._database = database or MysqlQueryDatabase(settings)
         self._model = model
         self._audit_repository = audit_repository or MysqlAuditRepository(settings)
         self._knowledge_retriever = knowledge_retriever or MarkdownBusinessKnowledgeRetriever()
+        if hive_database is not None:
+            self._hive_database = hive_database
+        elif settings.big_data_enabled:
+            from app.database.hive import HiveQueryDatabase
+
+            self._hive_database = HiveQueryDatabase(settings)
+        else:
+            self._hive_database = None
         self._graph = self._build_graph()
 
     @property
@@ -136,11 +145,17 @@ class MysqlNaturalLanguageAgent:
             intent = "listing_search"
         return {"intent": intent}
 
-    # 2. Data source selection: MySQL now; state keeps the Hive extension point.
-    @staticmethod
-    def _select_data_source(state: AgentWorkflowState) -> AgentWorkflowState:
+    # 2. Deterministic data-source selection keeps routing outside the model.
+    def _select_data_source(self, state: AgentWorkflowState) -> AgentWorkflowState:
         if state["intent"] in {"unsafe_request", "unsupported"}:
             return {"data_source": "none", "selected_tables": []}
+        question = state["question"]
+        hive_query = "租金" not in question and (
+            state["intent"] == "trend"
+            or bool(re.search(r"(历史|离线|批量|全量|数仓|hive)", question, re.I))
+        )
+        if self._settings.big_data_enabled and self._hive_database is not None and hive_query:
+            return {"data_source": "hive"}
         return {"data_source": "mysql"}
 
     # 3. Normalize common entities before prompting the model.
@@ -187,7 +202,10 @@ class MysqlNaturalLanguageAgent:
 
     # 4. Retrieve safe schema and relevant business semantics from Markdown RAG.
     def _retrieve_context(self, state: AgentWorkflowState) -> AgentWorkflowState:
-        schema = self._database.describe_allowed_schema()
+        database = self._hive_database if state["data_source"] == "hive" else self._database
+        if database is None:
+            raise RuntimeError("已选择 Hive，但 Hive 查询工具未配置")
+        schema = database.describe_allowed_schema()
         retrieval = self._knowledge_retriever.retrieve(state["question"])
         return {
             "retrieved_context": f"{schema}\n\n检索到的业务口径：\n{retrieval.context}",
@@ -201,7 +219,9 @@ class MysqlNaturalLanguageAgent:
     def _build_query_plan(state: AgentWorkflowState) -> AgentWorkflowState:
         intent = state["intent"]
         structured = state["structured_question"]
-        if intent == "trend":
+        if state["data_source"] == "hive":
+            tables = ["house_info_analysis"]
+        elif intent == "trend":
             tables = ["v_agent_monthly_price_trend"]
         elif intent in {"ranking", "comparison"} and "bedroom_count" not in structured:
             tables = ["v_agent_district_summary"]
@@ -221,6 +241,7 @@ class MysqlNaturalLanguageAgent:
         generator = self._get_model().with_structured_output(QueryPlan, method="json_schema")
         plan = generator.invoke([
             SystemMessage(SQL_GENERATION_SYSTEM_PROMPT.format(
+                dialect_name="Hive" if state["data_source"] == "hive" else "MySQL",
                 query_plan=json.dumps(state["query_plan"], ensure_ascii=False),
                 context=state["retrieved_context"],
             )),
@@ -244,6 +265,7 @@ class MysqlNaturalLanguageAgent:
             plan_validator = SqlValidator(
                 set(state["selected_tables"]),
                 max_rows=self._settings.sql_max_rows,
+                dialect="hive" if state["data_source"] == "hive" else "mysql",
             )
             normalized = plan_validator.validate_and_normalize(candidate)
             return {
@@ -258,7 +280,10 @@ class MysqlNaturalLanguageAgent:
     # 8. Execute the read-only query.
     def _execute_query(self, state: AgentWorkflowState) -> AgentWorkflowState:
         try:
-            columns, rows = self._database.execute_read_only(state["generated_sql"])
+            database = self._hive_database if state["data_source"] == "hive" else self._database
+            if database is None:
+                raise RuntimeError("Hive 查询工具未配置")
+            columns, rows = database.execute_read_only(state["generated_sql"])
             normalized_rows = [[_json_value(value) for value in row] for row in rows]
             return {
                 "query_result": {"columns": columns, "rows": normalized_rows, "row_count": len(normalized_rows), "is_empty": False},
@@ -285,7 +310,10 @@ class MysqlNaturalLanguageAgent:
             "error": state["error"],
         }
         repaired = repair_model.invoke([
-            SystemMessage(SQL_REPAIR_SYSTEM_PROMPT.format(context=state["retrieved_context"])),
+            SystemMessage(SQL_REPAIR_SYSTEM_PROMPT.format(
+                dialect_name="Hive" if state["data_source"] == "hive" else "MySQL",
+                context=state["retrieved_context"],
+            )),
             HumanMessage(json.dumps(repair_request, ensure_ascii=False)),
         ])
         return {

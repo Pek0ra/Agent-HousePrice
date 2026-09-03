@@ -1,6 +1,6 @@
 # 一线城市房价智能问数 Agent
 
-项目的 Java 服务位于 `backend-java/`，Python Agent 位于 `agent-service/`。MySQL、Java 后端和 Python Agent 均可通过 Docker Compose 运行；开发时也可以直接在 IDE 中分别调试 Java 和 Python。当前 Python 服务已实现 MySQL 自然语言问数 MVP，Hive、HDFS 和 RAG 将在后续阶段接入。
+项目的 Java 服务位于 `backend-java/`，Python Agent 位于 `agent-service/`。MySQL、Java 后端和 Python Agent 均可通过 Docker Compose 运行；开发时也可以直接在 IDE 中分别调试 Java 和 Python。当前已实现 MySQL/Hive 多数据源问数、受控 LangGraph 工作流、业务语义 RAG，以及可选的 HDFS/Hive Docker 环境。
 
 ## 1. 配置环境变量
 
@@ -340,7 +340,7 @@ python -m pip install -e ".[dev]"
 python -m pytest -q
 ```
 
-当前应看到 `27 passed`。测试覆盖正常查询、空聚合结果、模糊问题澄清、一次错误修复、Prompt 注入、写语句、多语句、越权表、跨库限定名、锁定查询、`SELECT *`、文件导出、延时函数、审计记录、图表配置、RAG 召回和最大行数限制。
+当前应看到 `30 passed`。测试覆盖正常查询、空聚合结果、模糊问题澄清、一次错误修复、Prompt 注入、写语句、多语句、越权表、跨库限定名、锁定查询、`SELECT *`、文件导出、延时函数、审计记录、图表配置、RAG 召回、Hive 路由和最大行数限制。
 
 ### 阶段 5：第二轮验证
 
@@ -396,7 +396,7 @@ Set-Location D:\Github\Agent-HousePrice
 docker compose config --quiet
 ```
 
-预期为 `27 passed`，Compose 校验无输出且退出码为 0。其中 Prompt 注入用例会断言模型和数据库均未被调用；另一用例伪造模型连续返回 `DELETE` 和 `DROP`，验证 AST 和有限重试仍会拒绝。
+预期为 `30 passed`，Compose 校验无输出且退出码为 0。其中 Prompt 注入用例会断言模型和数据库均未被调用；另一用例伪造模型连续返回 `DELETE` 和 `DROP`，验证 AST 和有限重试仍会拒绝。
 
 ### 阶段 6：第二轮验证
 
@@ -486,7 +486,7 @@ python -m pytest -q
 python -c "from app.api.dependencies import get_mysql_agent; a=get_mysql_agent(); print(a.workflow_nodes); print(a.workflow_mermaid())"
 ```
 
-预期为 `27 passed`，然后打印 11 个业务节点及 Mermaid 图定义。测试覆盖完整正常路径、澄清短路、危险意图短路、有限重试、选表二级白名单、空结果、RAG 歧义和趋势图配置。
+预期为 `30 passed`，然后打印 11 个业务节点及 Mermaid 图定义。测试覆盖完整正常路径、澄清短路、危险意图短路、有限重试、选表二级白名单、空结果、RAG 歧义、Hive 路由和趋势图配置。
 
 ### 阶段 7：第二轮验证
 
@@ -553,7 +553,7 @@ python -c "from app.rag.retriever import MarkdownBusinessKnowledgeRetriever as R
 python -c "from app.rag.retriever import MarkdownBusinessKnowledgeRetriever as R; r=R(); print(r.retrieve('按面积除以总价计算，北京哪个区性价比最高？'))"
 ```
 
-预期 `27 passed`。第一次检索的 `needs_clarification=True`，第二次因用户已指定公式而为 `False`。
+预期 `30 passed`。第一次检索的 `needs_clarification=True`，第二次因用户已指定公式而为 `False`。
 
 ### 阶段 8：第二轮验证
 
@@ -577,3 +577,85 @@ foreach ($question in $questions) {
 ```
 
 预期第一个问题返回口径澄清且 `sql = null`；第二个问题允许生成只读 SQL，其中使用用户明确指定的 `area / total_price`；第三个问题明确说明当前缺少交通/学区字段，不伪造综合评分。
+
+## 12. Docker 化 HDFS/Hive 与多数据源 Agent
+
+核心模式只启动 MySQL、Java 和 Python；大数据模式额外启动 NameNode、DataNode、Hive Metastore、HiveServer2 以及两个一次性初始化服务。为保持原有 `docker compose up` 行为，核心服务不绑定 profile，只有大数据服务使用 `bigdata` profile。
+
+```powershell
+# 核心模式
+docker compose --profile core up --build -d
+
+# 大数据模式（推荐，自动固定 Java 构建与运行 profile）
+.\infra\bigdata\start-bigdata.ps1
+```
+
+也可以在根目录 `.env` 中将以下三项设为 bigdata 后手工启动：
+
+```ini
+JAVA_MAVEN_PROFILE=bigdata
+SPRING_PROFILES_ACTIVE=bigdata
+BIG_DATA_ENABLED=true
+```
+
+```powershell
+docker compose --profile bigdata up --build -d
+docker compose --profile bigdata ps -a
+```
+
+容器内 Java 使用 `jdbc:hive2://hiveserver2:10000/mydb`，Python 使用 `hiveserver2:10000`；宿主机 JDBC/Workbench/Beeline 使用 `jdbc:hive2://localhost:10001/mydb`。HDFS NameNode UI 为 `http://localhost:9870`，DataNode UI 为 `http://localhost:9864`，HiveServer2 Web UI 为 `http://localhost:10002`。
+
+Hive 采用与现有 Java 驱动一致的 `apache/hive:3.1.3`，HDFS 使用 `apache/hadoop:3.3.6`。由于没有部署 YARN，SQL 执行使用 Tez local mode；自定义 Docker 网络名避免 Hive 3 把 Compose 默认网络名中的下划线解析成非法 URI。官方镜像的服务变量、远程 Metastore 和初始化方式参考 [Apache Hive Docker setup](https://hive.apache.org/docs/latest/admin/setting-up-hive-with-docker/)，镜像版本可在 [Apache Hive tags](https://hub.docker.com/r/apache/hive/tags) 和 [Apache Hadoop image](https://hub.docker.com/r/apache/hadoop) 查看。
+
+Agent 路由规则是确定性的：单条房源、实时列表和租金查询走 MySQL；明确包含“历史、离线、批量、全量、数仓、Hive”的出售房趋势/统计走 Hive。当前 Hive 演示表没有租赁历史，因此租金趋势仍走 MySQL，避免跨数据源混用口径。少量演示数据并不需要 Hive 提升性能，这一层主要展示离线数仓、CSV 入湖和多数据源 Agent 能力。
+
+### 阶段 9：第一轮验证
+
+第一轮验证配置和代码，不依赖容器已经启动：
+
+```powershell
+docker compose --profile core config --quiet
+docker compose --profile bigdata config --quiet
+
+Set-Location agent-service
+.\.venv\Scripts\Activate.ps1
+python -m pytest -q
+Set-Location ..\backend-java
+.\mvnw.cmd -B -Pbigdata test
+Set-Location ..
+```
+
+预期两次 Compose 校验退出码为 0，Python 显示 `30 passed`，Java 显示 `Tests run: 21` 和 `BUILD SUCCESS`。
+
+### 阶段 9：第二轮验证
+
+启动后验证每一层，而不只检查端口：
+
+```powershell
+.\infra\bigdata\start-bigdata.ps1
+
+# HDFS：必须看到 Live datanodes (1)
+docker compose exec namenode hdfs dfsadmin -report
+docker compose exec namenode hdfs dfs -ls -R /data /user/hive/warehouse/mydb.db
+
+# Hive：必须看到 4 张表、7 条中文样本和 3 个月份
+docker compose exec hiveserver2 beeline `
+  -u jdbc:hive2://localhost:10000/mydb -n hive `
+  -e "SHOW TABLES; SELECT city,district,listing_month,unit_price FROM house_info_analysis ORDER BY listing_month;"
+
+# Java Hive JDBC
+Invoke-RestMethod http://localhost:9900/actuator/health
+Invoke-RestMethod http://localhost:9900/api/system/capabilities | ConvertTo-Json -Depth 5
+Invoke-RestMethod 'http://localhost:9900/api/analytics/price-trends?city=上海市&months=12' | ConvertTo-Json -Depth 8
+
+# Java WebHDFS 上传 + Hive 清洗/质量统计
+curl.exe --fail-with-body -F "file=@backend-java/docs/templates/house_info_import_template.csv;type=text/csv" `
+  http://localhost:9900/api/house-imports
+
+# Agent 自动选择 Hive
+$body = @{ message = '上海历史房价月度趋势如何？' } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/v1/chat `
+  -ContentType 'application/json; charset=utf-8' -Body $body | ConvertTo-Json -Depth 10
+```
+
+预期能力接口显示 `mode=bigdata` 和 `bigDataEnabled=true`；CSV 任务状态为 `SUCCESS`；Agent SQL 只访问 `house_info_analysis`，返回 2026-01 至 2026-03 的 `65000、67000、70000` 元/平方米及 `line` 图表配置。普通 `docker compose down` 保留 MySQL、HDFS、Metastore 和 Java 数据；`docker compose down -v` 会永久删除这些卷，仅用于刻意重置演示环境。
