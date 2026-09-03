@@ -1,6 +1,6 @@
 # 一线城市房价智能问数 Agent
 
-当前阶段保留 `prjspringbootzufanghive/` 中的 Java 项目结构。MySQL 和 Java 后端均可通过 Docker Compose 运行；开发时仍可只启动 MySQL，并直接在 IDE 中调试 Java。Hive、HDFS 和 Python Agent 将在后续阶段接入。
+项目的 Java 服务位于 `backend-java/`。MySQL 和 Java 后端均可通过 Docker Compose 运行；开发时仍可只启动 MySQL，并直接在 IDE 中调试 Java。Hive、HDFS 和 Python Agent 将在后续阶段接入。
 
 ## 1. 配置环境变量
 
@@ -63,7 +63,7 @@ docker compose ps
 设置上述环境变量后：
 
 ```powershell
-Set-Location prjspringbootzufanghive
+Set-Location backend-java
 .\mvnw.cmd package -DskipTests
 java -jar target\prjspringboothive-ver1.0.jar
 ```
@@ -91,7 +91,7 @@ Invoke-RestMethod http://localhost:9900/api/statistics/overview
 第一轮验证自动化测试及 local 模式配置，不要求本机存在 Hive/HDFS：
 
 ```powershell
-Set-Location prjspringbootzufanghive
+Set-Location backend-java
 .\mvnw.cmd test
 Set-Location ..
 ```
@@ -136,7 +136,7 @@ Compose 中的 Java 使用 `jdbc:mysql://mysql:3306/house_price` 访问 MySQL，
 
 ```powershell
 docker compose config --quiet
-Set-Location prjspringbootzufanghive
+Set-Location backend-java
 .\mvnw.cmd test
 Set-Location ..
 docker compose build java-backend

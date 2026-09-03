@@ -28,7 +28,7 @@ services:
 
   java-backend:
     build:
-      context: ./prjspringbootzufanghive
+      context: ./backend-java
       dockerfile: Dockerfile
       args:
         MAVEN_PROFILE: ${JAVA_MAVEN_PROFILE:-local}
