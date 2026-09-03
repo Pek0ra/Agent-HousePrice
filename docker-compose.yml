@@ -125,6 +125,32 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: agent-house-price-frontend:local
+    container_name: agent-house-price-frontend
+    restart: unless-stopped
+    depends_on:
+      java-backend:
+        condition: service_healthy
+      python-agent:
+        condition: service_healthy
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   mysql-agent-security:
     image: mysql:8.0
     container_name: agent-house-price-mysql-agent-security

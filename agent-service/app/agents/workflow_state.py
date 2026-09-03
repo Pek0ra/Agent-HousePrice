@@ -35,6 +35,7 @@ class AgentWorkflowState(TypedDict, total=False):
     selected_tables: list[str]
     retrieved_context: str
     retrieved_document_ids: list[str]
+    retrieved_metrics: list[dict[str, str]]
     structured_question: dict[str, Any]
     query_plan: dict[str, Any]
     generated_sql: str

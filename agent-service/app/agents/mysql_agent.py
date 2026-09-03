@@ -23,7 +23,7 @@ from app.config import Settings
 from app.database.audit import MysqlAuditRepository
 from app.database.mysql import MysqlQueryDatabase
 from app.rag.retriever import MarkdownBusinessKnowledgeRetriever
-from app.schemas.chat import AnswerDraft, ChatResponse, QueryPlan
+from app.schemas.chat import AnswerDraft, ChatResponse, ExecutionDetails, QueryPlan
 from app.security.sql_validator import SqlValidator
 
 logger = logging.getLogger(__name__)
@@ -210,6 +210,14 @@ class MysqlNaturalLanguageAgent:
         return {
             "retrieved_context": f"{schema}\n\n检索到的业务口径：\n{retrieval.context}",
             "retrieved_document_ids": retrieval.document_ids,
+            "retrieved_metrics": [
+                {
+                    "id": document.document_id,
+                    "title": document.title,
+                    "description": document.content,
+                }
+                for document in retrieval.documents
+            ],
             "needs_clarification": retrieval.needs_clarification,
             "clarification_question": retrieval.clarification_question,
         }
@@ -456,6 +464,7 @@ class MysqlNaturalLanguageAgent:
                 audit_status = "NO_DATA" if final_state["query_result"]["is_empty"] else "SUCCESS"
 
             result = final_state.get("query_result")
+            duration_ms = int((time.perf_counter() - started) * 1000)
             return ChatResponse(
                 answer=final_state["final_answer"],
                 sql=final_state.get("generated_sql") or None,
@@ -463,6 +472,14 @@ class MysqlNaturalLanguageAgent:
                 rows=result["rows"] if result else [],
                 chart=final_state.get("chart_config"),
                 trace_id=trace_id,
+                details=ExecutionDetails(
+                    data_source=final_state.get("data_source", "none"),
+                    duration_ms=duration_ms,
+                    selected_tables=final_state.get("selected_tables", []),
+                    retrieved_metrics=final_state.get("retrieved_metrics", []),
+                    row_count=result["row_count"] if result else 0,
+                    retry_count=final_state.get("retry_count", 0),
+                ),
             )
         except Exception as exc:
             if error_summary is None:

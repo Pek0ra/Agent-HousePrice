@@ -47,6 +47,8 @@ def test_chat_returns_query_result_contract() -> None:
     assert body["rows"] == [[8500.0]]
     assert body["chart"] is None
     assert body["trace_id"] == "test-trace-id"
+    assert body["details"]["data_source"] == "none"
+    assert body["details"]["duration_ms"] == 0
     assert body["sql"].startswith("SELECT")
     assert response.headers["content-type"] == "application/json; charset=utf-8"
     assert "浦东新区三室一厅" in response.content.decode("utf-8")

@@ -7,5 +7,10 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 
+# Frontend dependencies and build output
+node_modules/
+dist/
+.vite/
+
 # Local runtime data
 data/

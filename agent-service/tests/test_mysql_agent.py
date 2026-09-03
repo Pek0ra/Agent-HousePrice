@@ -92,6 +92,9 @@ def test_graph_executes_validated_query_and_returns_contract() -> None:
     assert response.answer == "平均月租金为8500元/月。"
     assert response.sql is not None and "LIMIT 100" in response.sql
     assert database.executed_sql == response.sql
+    assert response.details.data_source == "mysql"
+    assert response.details.row_count == 1
+    assert response.details.selected_tables == ["v_agent_house_listing"]
     assert audit.records[0]["status"] == "SUCCESS"
     assert audit.records[0]["result_rows"] == 1
     assert "METRIC monthly_rent" in model.message_batches[0][0].content
@@ -340,6 +343,9 @@ def test_bigdata_routes_historical_price_trend_to_hive() -> None:
     assert hive_database.executed_sql == response.sql
     assert mysql_database.schema_load_count == 0
     assert response.chart is not None and response.chart["type"] == "line"
+    assert response.details.data_source == "hive"
+    assert response.details.selected_tables == ["house_info_analysis"]
+    assert response.details.retrieved_metrics[0].id == "monthly_trend"
     assert "Hive SQL" in model.message_batches[0][0].content
 
 

@@ -659,3 +659,51 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/v1/chat `
 ```
 
 预期能力接口显示 `mode=bigdata` 和 `bigDataEnabled=true`；CSV 任务状态为 `SUCCESS`；Agent SQL 只访问 `house_info_analysis`，返回 2026-01 至 2026-03 的 `65000、67000、70000` 元/平方米及 `line` 图表配置。普通 `docker compose down` 保留 MySQL、HDFS、Metastore 和 Java 数据；`docker compose down -v` 会永久删除这些卷，仅用于刻意重置演示环境。
+
+## 13. 智能问数前端与统一入口
+
+新版前端位于 `frontend/`，使用 React、TypeScript、Vite 和 ECharts。它与 Java 自带的旧静态页面相互独立，页面采用三栏工作台：左侧保存最近 30 条本地历史对话，中间展示问题、结论、表格与图表，右侧展示数据源、耗时、选表、SQL、重试次数、指标口径和 trace ID。
+
+Nginx 作为统一入口转发请求：
+
+```text
+/api/java/*   -> java-backend:9900/api/*
+/api/agent/*  -> python-agent:8000/api/v1/*
+```
+
+浏览器只访问 Nginx 同源地址，因此容器模式不需要额外处理跨域。当前仍使用普通 JSON 请求；SSE 流式回答留到下一次迭代，避免把展示层重构和流协议改造混在一起。后续可参考 [FastAPI SSE 文档](https://fastapi.tiangolo.com/tutorial/server-sent-events/)。
+
+### 阶段 10：第一轮验证
+
+验证前端编译、Python 响应契约和 Compose 配置：
+
+```powershell
+docker build -t agent-house-price-frontend:test ./frontend
+
+Set-Location agent-service
+.\.venv\Scripts\Activate.ps1
+python -m pytest -q
+Set-Location ..
+
+docker compose --profile core config --quiet
+docker compose --profile bigdata config --quiet
+```
+
+预期前端出现 `built`、Python 测试全部通过，两个 Compose 配置命令退出码均为 0。
+
+### 阶段 10：第二轮验证
+
+```powershell
+# core 模式；如果 80 端口被占用，可在 .env 设置 FRONTEND_PORT=8080
+docker compose --profile core up --build -d
+docker compose --profile core ps
+
+# 统一入口、Java 代理和 Agent 代理
+Invoke-WebRequest http://localhost/health -UseBasicParsing
+Invoke-RestMethod http://localhost/api/java/system/capabilities | ConvertTo-Json -Depth 5
+$body = @{ message = '北京各区平均房价最高的五个区是哪几个？' } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri http://localhost/api/agent/chat `
+  -ContentType 'application/json; charset=utf-8' -Body $body | ConvertTo-Json -Depth 12
+```
+
+然后打开 `http://localhost`，依次验证：历史对话可切换、回答表格正常、排名/趋势问题出现图表、SQL 可以展开、右侧数据源及指标说明与响应一致、刷新页面后历史记录仍保留。若配置了其他 `FRONTEND_PORT`，请相应修改地址。
