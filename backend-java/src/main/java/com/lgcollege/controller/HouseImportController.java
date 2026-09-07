@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestPart;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -41,7 +42,11 @@ public class HouseImportController {
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<ApiResponse<HouseImportTask>> upload(
-            @RequestPart("file") MultipartFile file) {
+            @RequestPart("file") MultipartFile file,
+            @RequestParam(name = "mode", defaultValue = "replace") String mode) {
+        if (!"replace".equalsIgnoreCase(mode)) {
+            throw new IllegalArgumentException("mode currently supports only replace");
+        }
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.success(importService.importCsv(file)));
     }
@@ -64,6 +69,12 @@ public class HouseImportController {
             throw new ResourceNotFoundException("导入任务不存在，id=" + id);
         }
         return ApiResponse.success(importService.retry(id));
+    }
+
+    @PostMapping("/{id}/activate")
+    public ApiResponse<HouseImportTask> activate(
+            @Positive(message = "id must be positive") @PathVariable Long id) {
+        return ApiResponse.success(importService.activateDataset(id));
     }
 
     @GetMapping(value = "/{id}/errors", produces = "text/csv;charset=UTF-8")
@@ -90,7 +101,7 @@ public class HouseImportController {
         String csv = "\uFEFF" + String.join(",", HouseCsvValidator.HEADERS) + "\r\n";
         HttpHeaders headers = new HttpHeaders();
         headers.setContentDisposition(ContentDisposition.attachment()
-                .filename("house_info_import_template.csv", StandardCharsets.UTF_8)
+                .filename("house_listings_import_template.csv", StandardCharsets.UTF_8)
                 .build());
         return new ResponseEntity<>(
                 csv.getBytes(StandardCharsets.UTF_8), headers, HttpStatus.OK);

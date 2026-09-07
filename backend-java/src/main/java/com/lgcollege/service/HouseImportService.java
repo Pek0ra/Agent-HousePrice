@@ -9,6 +9,8 @@ public interface HouseImportService {
 
     HouseImportTask retry(Long id);
 
+    HouseImportTask activateDataset(Long id);
+
     HouseImportTask findTask(Long id);
 
     Path findErrorReport(Long id);

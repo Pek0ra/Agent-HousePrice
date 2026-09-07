@@ -30,11 +30,11 @@ class FakeDatabase:
 
 
 class FakeHiveDatabase(FakeDatabase):
-    allowed_tables = {"house_info_analysis", "house_data_quality_summary"}
+    allowed_tables = {"v_agent_house_info_analysis", "v_agent_house_data_quality_summary"}
 
     def describe_allowed_schema(self) -> str:
         self.schema_load_count += 1
-        return "TABLE house_info_analysis COLUMNS: listing_month STRING, unit_price DECIMAL"
+        return "TABLE v_agent_house_info_analysis COLUMNS: listing_month STRING, unit_price DECIMAL"
 
 
 class FakeStructuredModel:
@@ -324,7 +324,7 @@ def test_bigdata_routes_historical_price_trend_to_hive() -> None:
             needs_clarification=False,
             sql=(
                 "SELECT listing_month, AVG(unit_price) AS avg_unit_price "
-                "FROM house_info_analysis WHERE city = '上海市' "
+                "FROM v_agent_house_info_analysis WHERE city = '上海市' "
                 "GROUP BY listing_month ORDER BY listing_month"
             ),
         )
@@ -339,29 +339,30 @@ def test_bigdata_routes_historical_price_trend_to_hive() -> None:
 
     response = agent.ask("上海历史房价的月度趋势如何？")
 
-    assert "house_info_analysis" in (response.sql or "")
+    assert "v_agent_house_info_analysis" in (response.sql or "")
     assert hive_database.executed_sql == response.sql
     assert mysql_database.schema_load_count == 0
     assert response.chart is not None and response.chart["type"] == "line"
     assert response.details.data_source == "hive"
-    assert response.details.selected_tables == ["house_info_analysis"]
+    assert response.details.selected_tables == ["v_agent_house_info_analysis"]
     assert response.details.retrieved_metrics[0].id == "monthly_trend"
     assert "Hive SQL" in model.message_batches[0][0].content
 
 
-def test_bigdata_keeps_historical_rental_trend_on_mysql_without_hive_rental_data() -> None:
-    mysql_database = FakeDatabase(
+def test_bigdata_routes_historical_rental_trend_to_hive() -> None:
+    mysql_database = FakeDatabase()
+    hive_database = FakeHiveDatabase(
         rows=[["2026-01", 8000.0], ["2026-02", 8500.0]],
         columns=["listing_month", "avg_monthly_rent"],
     )
-    hive_database = FakeHiveDatabase()
     model = FakeStructuredModel([
         QueryPlan(
             needs_clarification=False,
             sql=(
-                "SELECT listing_month, avg_monthly_rent "
-                "FROM v_agent_monthly_price_trend "
-                "WHERE city = '上海市' AND listing_type = 'RENT'"
+                "SELECT listing_month, AVG(monthly_rent) AS avg_monthly_rent "
+                "FROM v_agent_house_info_analysis "
+                "WHERE city = '上海市' AND listing_type = 'RENT' "
+                "GROUP BY listing_month ORDER BY listing_month"
             ),
         )
     ])
@@ -375,6 +376,30 @@ def test_bigdata_keeps_historical_rental_trend_on_mysql_without_hive_rental_data
 
     response = agent.ask("上海历史租金月度趋势如何？")
 
-    assert "v_agent_monthly_price_trend" in (response.sql or "")
-    assert mysql_database.executed_sql == response.sql
-    assert hive_database.schema_load_count == 0
+    assert "v_agent_house_info_analysis" in (response.sql or "")
+    assert hive_database.executed_sql == response.sql
+    assert mysql_database.schema_load_count == 0
+    assert response.details.data_source == "hive"
+
+
+def test_bigdata_routes_quality_question_to_active_quality_view() -> None:
+    mysql_database = FakeDatabase()
+    hive_database = FakeHiveDatabase(rows=[[20, 20, 8, 12, 100.0]],
+                                     columns=["total_rows", "valid_rows", "sale_rows", "rent_rows", "quality_score"])
+    model = FakeStructuredModel([
+        QueryPlan(needs_clarification=False, sql=(
+            "SELECT total_rows, valid_rows, sale_rows, rent_rows, quality_score "
+            "FROM v_agent_house_data_quality_summary"
+        ))
+    ])
+    agent = MysqlNaturalLanguageAgent(
+        Settings(openai_api_key="test-key", big_data_enabled=True),
+        database=mysql_database, hive_database=hive_database, model=model,
+        audit_repository=FakeAuditRepository(),
+    )
+
+    response = agent.ask("Hive里最近一次导入的数据质量如何？")
+
+    assert response.details.data_source == "hive"
+    assert response.details.selected_tables == ["v_agent_house_data_quality_summary"]
+    assert hive_database.executed_sql == response.sql

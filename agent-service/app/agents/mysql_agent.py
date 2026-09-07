@@ -34,7 +34,8 @@ UNSAFE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 HOUSING_PATTERN = re.compile(
-    r"(房|租金|房价|挂牌|小区|行政区|均价|单价|总价|趋势|成交|性价比|划算)"
+    r"(房|租金|房价|挂牌|小区|行政区|均价|单价|总价|趋势|成交|性价比|划算|"
+    r"数据质量|质量分|导入任务|数仓|hive)"
 )
 
 CITY_ALIASES = {
@@ -150,9 +151,8 @@ class MysqlNaturalLanguageAgent:
         if state["intent"] in {"unsafe_request", "unsupported"}:
             return {"data_source": "none", "selected_tables": []}
         question = state["question"]
-        hive_query = "租金" not in question and (
-            state["intent"] == "trend"
-            or bool(re.search(r"(历史|离线|批量|全量|数仓|hive)", question, re.I))
+        hive_query = state["intent"] == "trend" or bool(
+            re.search(r"(历史|离线|批量|全量|数仓|hive|数据质量|质量分)", question, re.I)
         )
         if self._settings.big_data_enabled and self._hive_database is not None and hive_query:
             return {"data_source": "hive"}
@@ -228,7 +228,10 @@ class MysqlNaturalLanguageAgent:
         intent = state["intent"]
         structured = state["structured_question"]
         if state["data_source"] == "hive":
-            tables = ["house_info_analysis"]
+            if re.search(r"(数据质量|质量分|缺失|非法|重复)", state["question"]):
+                tables = ["v_agent_house_data_quality_summary"]
+            else:
+                tables = ["v_agent_house_info_analysis"]
         elif intent == "trend":
             tables = ["v_agent_monthly_price_trend"]
         elif intent in {"ranking", "comparison"} and "bedroom_count" not in structured:

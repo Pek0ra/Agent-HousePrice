@@ -26,6 +26,14 @@ public interface HouseImportTaskMapper {
             @Param("errorReportPath") String errorReportPath,
             @Param("stagingPath") String stagingPath);
 
+    int updateReconciliation(
+            @Param("id") Long id,
+            @Param("validRows") long validRows,
+            @Param("mysqlRows") long mysqlRows,
+            @Param("hiveRows") long hiveRows,
+            @Param("hiveAnalysisRows") long hiveAnalysisRows,
+            @Param("reconciliationStatus") String reconciliationStatus);
+
     int markSuccess(
             @Param("id") Long id,
             @Param("expectedStatus") ImportTaskStatus expectedStatus);

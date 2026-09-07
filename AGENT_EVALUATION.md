@@ -4,25 +4,24 @@
 
 ## 当前数据快照
 
-快照时间：2026-09-03（Asia/Shanghai）。预期结果基于当前开发实例；业务数据发生变化后，应重新生成预期事实或给数据集增加新版本。
+快照版本：`data/house_listings.csv`（20 条，8 SALE + 12 RENT）。预期事实由这份可上传 CSV 计算；业务数据发生变化后，应重新生成预期事实或为数据集增加新版本。
 
 ### MySQL
 
 - 数据库：`house_price`
-- 物理业务表：`house_info` 8 条，其中出售挂牌 8 条；`rental_listing` 12 条，其中出租挂牌 12 条。
+- 成功导入后，当前活动数据集在 `house_info` 中有 8 条 SALE，在 `rental_listing` 中有 12 条 RENT。旧版本可以保留，但 Agent 视图只读取活动版本。
 - Agent 查询视图：`v_agent_house_listing` 20 条、`v_agent_district_summary` 15 条、`v_agent_monthly_price_trend` 19 条。
-- 运维表：`house_import_task` 1 条、`agent_query_audit` 17 条、`flyway_schema_history` 5 条。审计记录会随测试增长，不属于固定业务样本。
+- 运维表：`house_import_task`、`house_dataset`、`house_dataset_state` 和 `agent_query_audit`。任务、版本、审计行数都会增长，不属于固定业务样本。
 - Docker 命名卷：`agent-house-price-mysql-data`。
 - 容器内挂载：`/var/lib/mysql`；Docker Desktop/WSL2 内部位置为 `/var/lib/docker/volumes/agent-house-price-mysql-data/_data`。不要直接编辑该目录。
 
 ### Hive/HDFS
 
 - Hive 数据库：`mydb`。
-- `house_info_raw`：1 条原始导入记录；`house_info_detail`：1 条清洗明细。
-- `house_info_analysis`：7 条离线出售房分析数据，分区为 `2026-01`、`2026-02`、`2026-03`。
-- `house_data_quality_summary`：1 条，质量分 100.00。
+- 当前活动版本：`house_info_detail` 20 条，`house_info_analysis` 20 条（8 SALE + 12 RENT），月份为 `2026-01`、`2026-02`、`2026-03`。
+- `v_agent_house_info_analysis` 只暴露当前活动版本；`v_agent_house_data_quality_summary` 对该版本返回 20 条有效记录、质量分 100.00。
 - HDFS 仓库：`hdfs:///user/hive/warehouse/mydb.db`，当前约 9.2 KiB。
-- 原始区：`hdfs:///data/house/raw`，当前约 428 B。
+- 规范化区：`hdfs:///data/house/normalized/{dataset_id}/house_listings.csv`。文件大小取决于导入数据，不做固定断言。
 - Docker 命名卷：`agent-house-price-hdfs-namenode`、`agent-house-price-hdfs-datanode`；Hive metastore 使用 `agent-house-price-hive-metastore`。
 
 ## 评测记录格式
@@ -75,8 +74,8 @@
 
 ## 运行前提与已知挑战项
 
-- MySQL 用例要求三个 `v_agent_*` 视图可用；Hive 用例要求以 bigdata profile 启动，并使 Python Agent 的 `BIG_DATA_ENABLED=true`。
-- `RT-08` 期望选择 `house_data_quality_summary`。当前工作流对所有 Hive 查询固定选择 `house_info_analysis`，该用例用于暴露并跟踪这一缺口。
+- MySQL 用例要求三个 `v_agent_*` 视图可用；Hive 用例要求活动视图 `v_agent_house_info_analysis`、`v_agent_house_data_quality_summary` 可用，并使 Python Agent 的 `BIG_DATA_ENABLED=true`。
+- 历史租金趋势已允许路由 Hive；当前列表和实时区域统计仍路由 MySQL。`RT-08` 必须选择数据质量活动视图。
 - `DR-07`、`DR-08`、`PI-03`、`PI-04`、`PI-05`、`PI-07` 包含意图识别边界攻击。即使意图层未提前识别，SQL 白名单/AST 校验和只读账号仍必须阻断危险行为。
 - 当前 API 已返回 `details.duration_ms`、数据源、表、结果行数和修复次数；模型 token、调用次数和费用尚未进入响应或审计表，需要在模型调用封装处增加 usage 采集后才能自动评测。
 - 测试会增加 `agent_query_audit` 行数，所以不要对该表做固定总数断言。

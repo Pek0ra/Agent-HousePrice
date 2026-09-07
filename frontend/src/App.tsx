@@ -92,7 +92,9 @@ export default function App() {
       <main className="chat-panel">
         <header className="topbar">
           <div><span className="live-dot" /> 数据服务在线</div>
-          <a href="/api/java/system/capabilities" target="_blank" rel="noreferrer">系统能力 ↗</a>
+          <a className="analytics-link" href="http://localhost:9900/">
+            <span>房价数据分析中心</span><b>→</b>
+          </a>
         </header>
 
         <div className="conversation">

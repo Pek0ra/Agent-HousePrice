@@ -101,7 +101,8 @@ public class HouseAnalyticsRepository {
     public List<PriceTrend> priceTrends(String city, int months) {
         List<Object> parameters = city == null
                 ? Collections.emptyList() : Collections.singletonList(city);
-        String where = city == null ? "" : " WHERE city = ?";
+        String where = city == null ? " WHERE listing_type = 'SALE'"
+                : " WHERE listing_type = 'SALE' AND city = ?";
         String sql = "SELECT listing_month, listing_count, avg_total_price, " +
                 "avg_unit_price FROM (" +
                 "SELECT listing_month, COUNT(1) listing_count, " +
@@ -127,10 +128,10 @@ public class HouseAnalyticsRepository {
     }
 
     public List<DataQualitySummary> qualitySummaries(int limit) {
-        String sql = "SELECT import_date, import_task_id, total_rows, valid_rows, " +
+        String sql = "SELECT dataset_id, import_task_id, total_rows, valid_rows, sale_rows, rent_rows, " +
                 "missing_location_rows, invalid_price_rows, invalid_area_rows, " +
                 "duplicate_source_rows, quality_score FROM " + qualityTable +
-                " ORDER BY import_date DESC, import_task_id DESC LIMIT " + limit;
+                " ORDER BY import_task_id DESC LIMIT " + limit;
         List<DataQualitySummary> rows = new ArrayList<>();
         try (Connection connection = hiveDataSource.getConnection();
              Statement statement = connection.createStatement()) {
@@ -146,7 +147,9 @@ public class HouseAnalyticsRepository {
                             result.getLong(6),
                             result.getLong(7),
                             result.getLong(8),
-                            decimal(result, 9)));
+                            result.getLong(9),
+                            result.getLong(10),
+                            decimal(result, 11)));
                 }
             }
             return rows;
@@ -156,49 +159,15 @@ public class HouseAnalyticsRepository {
     }
 
     public CompactionResult compactAnalysisTable() {
-        long startedAt = System.nanoTime();
-        String compactSql = buildCompactionSql();
-        try (Connection connection = hiveDataSource.getConnection();
-             Statement statement = connection.createStatement()) {
-            statement.setQueryTimeout(queryTimeoutSeconds);
-            statement.execute("SET hive.exec.compress.output=true");
-            statement.execute("SET hive.exec.dynamic.partition=true");
-            statement.execute("SET hive.exec.dynamic.partition.mode=nonstrict");
-            statement.execute("SET hive.merge.mapfiles=true");
-            statement.execute("SET hive.merge.mapredfiles=true");
-            statement.execute("SET hive.merge.tezfiles=true");
-            statement.execute("SET hive.merge.size.per.task=268435456");
-            statement.execute("SET hive.merge.smallfiles.avgsize=16777216");
-            statement.execute(compactSql);
-            return new CompactionResult(
-                    "SUCCESS",
-                    (System.nanoTime() - startedAt) / 1_000_000,
-                    analysisTable);
-        } catch (SQLException exception) {
-            throw analyticsFailure(exception);
-        }
-    }
-
-    private String buildCompactionSql() {
-        String businessKey =
-                "CASE WHEN source_record_id IS NOT NULL AND TRIM(source_record_id) <> '' " +
-                "THEN CONCAT(data_source, '\\u0001', source_record_id) " +
-                "ELSE CONCAT('TASK:', CAST(import_task_id AS STRING), ':', " +
-                "COALESCE(title, ''), ':', COALESCE(community, '')) END";
-        return "INSERT OVERWRITE TABLE " + analysisTable +
-                " PARTITION (listing_month) " +
-                "SELECT source_record_id, title, city, district, community, " +
-                "total_price, unit_price, area, bedroom_count, living_room_count, " +
-                "layout, orientation, floor_level, total_floors, decoration, " +
-                "listing_date, data_source, import_task_id, " +
-                "COALESCE(DATE_FORMAT(listing_date, 'yyyy-MM'), SUBSTR(import_date, 1, 7)) " +
-                "FROM (SELECT d.*, ROW_NUMBER() OVER (PARTITION BY " + businessKey +
-                " ORDER BY import_task_id DESC) AS row_num FROM " + detailTable +
-                " d) deduplicated WHERE row_num = 1";
+        // Analysis partitions are rebuilt and reconciled inside every successful import.
+        // Keeping this endpoint as a non-destructive compatibility operation prevents
+        // an operator from accidentally compacting failed or archived datasets together.
+        return new CompactionResult("ALREADY_COMPACTED", 0, analysisTable);
     }
 
     private FilterSql filter(String month, String city) {
         List<String> conditions = new ArrayList<>();
+        conditions.add("listing_type = 'SALE'");
         List<Object> parameters = new ArrayList<>();
         if (month != null) {
             conditions.add("listing_month = ?");

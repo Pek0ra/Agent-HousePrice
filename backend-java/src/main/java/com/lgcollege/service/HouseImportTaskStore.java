@@ -8,7 +8,9 @@ public interface HouseImportTaskStore {
             String originalFilename,
             long fileSize,
             String fileSha256,
-            String stagingPath);
+            String stagingPath,
+            String datasetId,
+            String previousDatasetId);
 
     HouseImportTask findSuccessfulByHash(String fileSha256);
 
@@ -26,6 +28,9 @@ public interface HouseImportTaskStore {
             String hdfsPath,
             String errorReportPath,
             String stagingPath);
+
+    void updateReconciliation(Long id, long validRows, long mysqlRows,
+                              long hiveRows, long hiveAnalysisRows, String status);
 
     void markSuccess(Long id, ImportTaskStatus expectedStatus);
 

@@ -23,15 +23,28 @@ public class HouseImportTaskStoreImpl implements HouseImportTaskStore {
             String originalFilename,
             long fileSize,
             String fileSha256,
-            String stagingPath) {
+            String stagingPath,
+            String datasetId,
+            String previousDatasetId) {
         HouseImportTask task = new HouseImportTask();
         task.setOriginalFilename(originalFilename);
         task.setFileSize(fileSize);
         task.setFileSha256(fileSha256);
         task.setStatus(ImportTaskStatus.PENDING);
         task.setStagingPath(stagingPath);
+        task.setDatasetId(datasetId);
+        task.setPreviousDatasetId(previousDatasetId);
         mapper.insert(task);
         return mapper.findById(task.getId());
+    }
+
+    @Override
+    @Transactional(transactionManager = "mysqlTransactionManager")
+    public void updateReconciliation(Long id, long validRows, long mysqlRows,
+                                     long hiveRows, long hiveAnalysisRows, String status) {
+        if (mapper.updateReconciliation(id, validRows, mysqlRows, hiveRows, hiveAnalysisRows, status) != 1) {
+            throw new TaskStateConflictException("更新导入对账结果失败，id=" + id);
+        }
     }
 
     @Override

@@ -5,23 +5,23 @@ from pyhive import hive
 from app.config import Settings
 
 HIVE_ALLOWED_COLUMNS: dict[str, tuple[str, ...]] = {
-    "house_info_analysis": (
-        "source_record_id", "title", "city", "district", "community",
-        "total_price", "unit_price", "area", "bedroom_count",
+    "v_agent_house_info_analysis": (
+        "source_record_id", "listing_type", "title", "city", "district", "community",
+        "total_price", "unit_price", "monthly_rent", "area", "bedroom_count",
         "living_room_count", "layout", "orientation", "floor_level",
         "total_floors", "decoration", "listing_date", "data_source",
-        "import_task_id", "listing_month",
+        "source_import_task_id", "dataset_id", "listing_month",
     ),
-    "house_data_quality_summary": (
-        "total_rows", "valid_rows", "missing_location_rows",
+    "v_agent_house_data_quality_summary": (
+        "total_rows", "valid_rows", "sale_rows", "rent_rows", "missing_location_rows",
         "invalid_price_rows", "invalid_area_rows", "duplicate_source_rows",
-        "quality_score", "import_date", "import_task_id",
+        "quality_score", "dataset_id", "import_task_id",
     ),
 }
 
 HIVE_TABLE_DESCRIPTIONS = {
-    "house_info_analysis": "历史出售房挂牌明细，按 listing_month 分区，用于离线趋势和批量统计。",
-    "house_data_quality_summary": "CSV 导入批次的数据质量统计。",
+    "v_agent_house_info_analysis": "当前已激活数据集的出售与出租挂牌明细，用于离线趋势和批量统计。",
+    "v_agent_house_data_quality_summary": "当前已激活 CSV 数据集的数据质量统计。",
 }
 
 

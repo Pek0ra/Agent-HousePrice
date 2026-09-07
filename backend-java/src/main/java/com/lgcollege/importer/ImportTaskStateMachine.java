@@ -17,18 +17,16 @@ public class ImportTaskStateMachine {
 
     public ImportTaskStateMachine(HouseImportTaskStore taskStore) {
         this.taskStore = taskStore;
-        allow(ImportTaskStatus.PENDING,
-                ImportTaskStatus.VALIDATING, ImportTaskStatus.FAILED);
-        allow(ImportTaskStatus.VALIDATING,
-                ImportTaskStatus.UPLOADING_HDFS, ImportTaskStatus.FAILED);
-        allow(ImportTaskStatus.UPLOADING_HDFS,
-                ImportTaskStatus.LOADING_HIVE, ImportTaskStatus.FAILED);
-        allow(ImportTaskStatus.LOADING_HIVE,
-                ImportTaskStatus.SUCCESS, ImportTaskStatus.FAILED);
+        allow(ImportTaskStatus.PENDING, ImportTaskStatus.VALIDATING, ImportTaskStatus.FAILED);
+        allow(ImportTaskStatus.VALIDATING, ImportTaskStatus.LOADING_MYSQL, ImportTaskStatus.FAILED);
+        allow(ImportTaskStatus.LOADING_MYSQL, ImportTaskStatus.UPLOADING_HDFS, ImportTaskStatus.FAILED);
+        allow(ImportTaskStatus.UPLOADING_HDFS, ImportTaskStatus.LOADING_HIVE, ImportTaskStatus.FAILED);
+        allow(ImportTaskStatus.LOADING_HIVE, ImportTaskStatus.COMPACTING_HIVE, ImportTaskStatus.FAILED);
+        allow(ImportTaskStatus.COMPACTING_HIVE, ImportTaskStatus.VERIFYING, ImportTaskStatus.FAILED);
+        allow(ImportTaskStatus.VERIFYING, ImportTaskStatus.ACTIVATING, ImportTaskStatus.FAILED);
+        allow(ImportTaskStatus.ACTIVATING, ImportTaskStatus.SUCCESS, ImportTaskStatus.FAILED);
         allow(ImportTaskStatus.FAILED, ImportTaskStatus.RETRYING);
-        allow(ImportTaskStatus.RETRYING,
-                ImportTaskStatus.UPLOADING_HDFS, ImportTaskStatus.LOADING_HIVE,
-                ImportTaskStatus.FAILED);
+        allow(ImportTaskStatus.RETRYING, ImportTaskStatus.VALIDATING, ImportTaskStatus.FAILED);
     }
 
     public void transition(

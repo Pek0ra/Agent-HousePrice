@@ -56,7 +56,7 @@ class HouseAnalyticsControllerTests {
                         new BigDecimal("61234.56"))));
         when(analyticsService.qualitySummaries(10))
                 .thenReturn(Collections.singletonList(new DataQualitySummary(
-                        "2026-07-26", 15, 100, 98,
+                        "00000000-0000-0000-0000-000000000015", 15, 100, 98, 50, 48,
                         1, 0, 0, 1, new BigDecimal("98.00"))));
 
         mockMvc.perform(get("/api/analytics/overview")

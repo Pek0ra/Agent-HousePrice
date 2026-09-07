@@ -186,12 +186,13 @@ SELECT installed_rank, version, description, success
 FROM flyway_schema_history
 ORDER BY installed_rank;
 
-SELECT source_record_id, title, city, district, community, address
-FROM house_info
-WHERE source_record_id = 'SAMPLE-001';
+SELECT COUNT(*) AS legacy_demo_rows FROM house_info
+WHERE source_record_id = 'SAMPLE-001' OR source_record_id LIKE 'AGENT-SALE-%';
+SELECT COUNT(*) AS legacy_demo_rows FROM rental_listing
+WHERE source_record_id LIKE 'AGENT-RENT-%';
 ```
 
-预期字符集为 `utf8mb4`、排序规则为 `utf8mb4_0900_ai_ci`，表注释和示例数据中的中文应正常显示。
+预期字符集为 `utf8mb4`、排序规则为 `utf8mb4_0900_ai_ci`，表注释中文正常，两个 `legacy_demo_rows` 均为 0。全新环境在上传 CSV 前业务视图为空。
 
 如果 Windows 的 `mysql.exe` 命令行显示 `CSV鍒癏DFS...`，但 Workbench 显示正常，通常是终端显示编码而不是数据库存储错误。可使用以下方式连接：
 
@@ -340,7 +341,7 @@ python -m pip install -e ".[dev]"
 python -m pytest -q
 ```
 
-当前应看到 `30 passed`。测试覆盖正常查询、空聚合结果、模糊问题澄清、一次错误修复、Prompt 注入、写语句、多语句、越权表、跨库限定名、锁定查询、`SELECT *`、文件导出、延时函数、审计记录、图表配置、RAG 召回、Hive 路由和最大行数限制。
+当前应看到 `31 passed`。测试覆盖正常查询、空聚合结果、模糊问题澄清、一次错误修复、Prompt 注入、写语句、多语句、越权表、跨库限定名、锁定查询、`SELECT *`、文件导出、延时函数、审计记录、图表配置、RAG 召回、Hive 路由和最大行数限制。
 
 ### 阶段 5：第二轮验证
 
@@ -396,7 +397,7 @@ Set-Location D:\Github\Agent-HousePrice
 docker compose config --quiet
 ```
 
-预期为 `30 passed`，Compose 校验无输出且退出码为 0。其中 Prompt 注入用例会断言模型和数据库均未被调用；另一用例伪造模型连续返回 `DELETE` 和 `DROP`，验证 AST 和有限重试仍会拒绝。
+预期为 `31 passed`，Compose 校验无输出且退出码为 0。其中 Prompt 注入用例会断言模型和数据库均未被调用；另一用例伪造模型连续返回 `DELETE` 和 `DROP`，验证 AST 和有限重试仍会拒绝。
 
 ### 阶段 6：第二轮验证
 
@@ -486,7 +487,7 @@ python -m pytest -q
 python -c "from app.api.dependencies import get_mysql_agent; a=get_mysql_agent(); print(a.workflow_nodes); print(a.workflow_mermaid())"
 ```
 
-预期为 `30 passed`，然后打印 11 个业务节点及 Mermaid 图定义。测试覆盖完整正常路径、澄清短路、危险意图短路、有限重试、选表二级白名单、空结果、RAG 歧义、Hive 路由和趋势图配置。
+预期为 `31 passed`，然后打印 11 个业务节点及 Mermaid 图定义。测试覆盖完整正常路径、澄清短路、危险意图短路、有限重试、选表二级白名单、空结果、RAG 歧义、Hive 路由和趋势图配置。
 
 ### 阶段 7：第二轮验证
 
@@ -553,7 +554,7 @@ python -c "from app.rag.retriever import MarkdownBusinessKnowledgeRetriever as R
 python -c "from app.rag.retriever import MarkdownBusinessKnowledgeRetriever as R; r=R(); print(r.retrieve('按面积除以总价计算，北京哪个区性价比最高？'))"
 ```
 
-预期 `30 passed`。第一次检索的 `needs_clarification=True`，第二次因用户已指定公式而为 `False`。
+预期 `31 passed`。第一次检索的 `needs_clarification=True`，第二次因用户已指定公式而为 `False`。
 
 ### 阶段 8：第二轮验证
 
@@ -580,13 +581,20 @@ foreach ($question in $questions) {
 
 ## 12. Docker 化 HDFS/Hive 与多数据源 Agent
 
-核心模式只启动 MySQL、Java 和 Python；大数据模式额外启动 NameNode、DataNode、Hive Metastore、HiveServer2 以及两个一次性初始化服务。为保持原有 `docker compose up` 行为，核心服务不绑定 profile，只有大数据服务使用 `bigdata` profile。
+核心模式只启动 MySQL、Java 和 Python；大数据模式额外启动 NameNode、DataNode、Hive Metastore、HiveServer2，以及 HDFS、Metastore 卷权限、Metastore Schema 和 Hive 业务表的幂等初始化任务。为保持原有 `docker compose up` 行为，核心服务不绑定 profile，只有大数据服务使用 `bigdata` profile。
 
 ```powershell
 # 核心模式
 docker compose --profile core up --build -d
 
 # 大数据模式（推荐，自动固定 Java 构建与运行 profile）
+.\infra\bigdata\start-bigdata.ps1
+```
+
+如果宿主机已有 MySQL 占用 3306，只修改宿主机映射端口即可；容器之间仍通过 `mysql:3306` 通信：
+
+```powershell
+$env:MYSQL_PORT = '3307'
 .\infra\bigdata\start-bigdata.ps1
 ```
 
@@ -607,7 +615,29 @@ docker compose --profile bigdata ps -a
 
 Hive 采用与现有 Java 驱动一致的 `apache/hive:3.1.3`，HDFS 使用 `apache/hadoop:3.3.6`。由于没有部署 YARN，SQL 执行使用 Tez local mode；自定义 Docker 网络名避免 Hive 3 把 Compose 默认网络名中的下划线解析成非法 URI。官方镜像的服务变量、远程 Metastore 和初始化方式参考 [Apache Hive Docker setup](https://hive.apache.org/docs/latest/admin/setting-up-hive-with-docker/)，镜像版本可在 [Apache Hive tags](https://hub.docker.com/r/apache/hive/tags) 和 [Apache Hadoop image](https://hub.docker.com/r/apache/hadoop) 查看。
 
-Agent 路由规则是确定性的：单条房源、实时列表和租金查询走 MySQL；明确包含“历史、离线、批量、全量、数仓、Hive”的出售房趋势/统计走 Hive。当前 Hive 演示表没有租赁历史，因此租金趋势仍走 MySQL，避免跨数据源混用口径。少量演示数据并不需要 Hive 提升性能，这一层主要展示离线数仓、CSV 入湖和多数据源 Agent 能力。
+已有 Hive 卷不会被删除。首次运行新版 `hive-init` 时，旧的四张同名表会重命名为 `*_legacy_pre_dataset`，随后创建支持 `dataset_id` 和 SALE/RENT 的新表；旧 HDFS 文件仍保留，但不会进入活动视图。确认新版导入和对账无误后，可另行备份或清理 legacy 表。不要为了迁移直接执行 `down -v`。
+
+Agent 路由规则是确定性的：当前房源明细、在线列表和当前区域统计走 MySQL；历史趋势以及明确包含“离线、批量、全量、数仓、Hive”的统计走 Hive。Hive 已同时支持 SALE 和 RENT，历史租金趋势也走 Hive。数据质量问题使用 `v_agent_house_data_quality_summary`，其他离线分析使用 `v_agent_house_info_analysis`。少量数据并不需要 Hive 提升性能，这一层主要展示离线数仓和多数据源 Agent 能力。
+
+### 统一 CSV 与替换语义
+
+可上传样例位于 `data/house_listings.csv`，空模板位于 `backend-java/docs/templates/house_listings_import_template.csv`，也可通过 `GET /api/house-imports/template` 下载。文件必须是 UTF-8（支持 BOM），业务键为 `data_source + source_record_id`。
+
+| 字段 | 含义与规则 |
+| --- | --- |
+| `source_record_id`、`data_source` | 必填，共同组成业务唯一键；禁止路径、分号和控制字符 |
+| `listing_type` | 必填，只能是 `SALE` 或 `RENT` |
+| `city`、`district`、`community` | 必填，使用标准中文名称 |
+| `listing_date` | 必填，格式 `yyyy-MM-dd` |
+| `area` | 必填且大于 0，单位平方米 |
+| `total_price` | SALE 必填，单位万元；RENT 必须为空 |
+| `unit_price` | SALE 可空，由 `total_price * 10000 / area` 统一计算；提供时误差默认不得超过 1%；RENT 必须为空 |
+| `monthly_rent` | RENT 必填，单位元/月；SALE 必须为空 |
+| 其余字段 | 标题、地址、户型、朝向、楼层、装修和周边说明等可选描述 |
+
+每次导入生成独立 `dataset_id`。Java 只规范化一次，然后批量暂存 MySQL、上传同一份规范化 CSV、重建该版本的 Hive detail/analysis/quality 分区并对账。只有 CSV 有效行数、MySQL SALE+RENT、Hive detail/analysis 及分类行数全部一致，才切换 MySQL/Hive 的活动版本。旧版本保留用于回滚，不会混入 Agent 统计；校验或任一存储步骤失败时，旧活动版本保持可见。默认模式是 `replace`。
+
+导入状态依次为 `PENDING → VALIDATING → LOADING_MYSQL → UPLOADING_HDFS → LOADING_HIVE → COMPACTING_HIVE → VERIFYING → ACTIVATING → SUCCESS`。外部系统失败可通过 retry 幂等重跑，默认最多 3 次；CSV 内容错误必须修正文件后重新上传。
 
 ### 阶段 9：第一轮验证
 
@@ -625,7 +655,7 @@ Set-Location ..\backend-java
 Set-Location ..
 ```
 
-预期两次 Compose 校验退出码为 0，Python 显示 `30 passed`，Java 显示 `Tests run: 21` 和 `BUILD SUCCESS`。
+预期两次 Compose 校验退出码为 0，Python 显示 `32 passed`，Java 显示 `Tests run: 29` 和 `BUILD SUCCESS`。
 
 ### 阶段 9：第二轮验证
 
@@ -638,27 +668,40 @@ Set-Location ..
 docker compose exec namenode hdfs dfsadmin -report
 docker compose exec namenode hdfs dfs -ls -R /data /user/hive/warehouse/mydb.db
 
-# Hive：必须看到 4 张表、7 条中文样本和 3 个月份
+# 全新环境：Hive 表为空，初始化脚本不写任何业务样例
 docker compose exec hiveserver2 beeline `
   -u jdbc:hive2://localhost:10000/mydb -n hive `
-  -e "SHOW TABLES; SELECT city,district,listing_month,unit_price FROM house_info_analysis ORDER BY listing_month;"
+  -e "SHOW TABLES; SELECT COUNT(*) FROM v_agent_house_info_analysis;"
 
 # Java Hive JDBC
 Invoke-RestMethod http://localhost:9900/actuator/health
 Invoke-RestMethod http://localhost:9900/api/system/capabilities | ConvertTo-Json -Depth 5
 Invoke-RestMethod 'http://localhost:9900/api/analytics/price-trends?city=上海市&months=12' | ConvertTo-Json -Depth 8
 
-# Java WebHDFS 上传 + Hive 清洗/质量统计
-curl.exe --fail-with-body -F "file=@backend-java/docs/templates/house_info_import_template.csv;type=text/csv" `
+# 上传同一份 SALE/RENT CSV；保存响应中的任务 id 和 datasetId
+$result = curl.exe --silent --show-error --fail-with-body `
+  -F "file=@data/house_listings.csv;type=text/csv" `
   http://localhost:9900/api/house-imports
+$result
+$taskId = ($result | ConvertFrom-Json).data.id
+Invoke-RestMethod "http://localhost:9900/api/house-imports/$taskId" | ConvertTo-Json -Depth 8
+
+# MySQL/Hive 两次独立核验：都应为 total=20、sale=8、rent=12
+docker compose exec mysql sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -uroot house_price -e "SELECT listing_type,COUNT(*) FROM v_agent_house_listing GROUP BY listing_type; SELECT * FROM house_dataset_state;"'
+docker compose exec hiveserver2 beeline `
+  -u jdbc:hive2://localhost:10000/mydb -n hive `
+  -e "SELECT listing_type,COUNT(*) FROM v_agent_house_info_analysis GROUP BY listing_type; SELECT total_rows,valid_rows,sale_rows,rent_rows,quality_score FROM v_agent_house_data_quality_summary;"
 
 # Agent 自动选择 Hive
 $body = @{ message = '上海历史房价月度趋势如何？' } | ConvertTo-Json
 Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/v1/chat `
-  -ContentType 'application/json; charset=utf-8' -Body $body | ConvertTo-Json -Depth 10
+  -ContentType 'application/json; charset=utf-8' `
+  -Body ([System.Text.Encoding]::UTF8.GetBytes($body)) | ConvertTo-Json -Depth 10
 ```
 
-预期能力接口显示 `mode=bigdata` 和 `bigDataEnabled=true`；CSV 任务状态为 `SUCCESS`；Agent SQL 只访问 `house_info_analysis`，返回 2026-01 至 2026-03 的 `65000、67000、70000` 元/平方米及 `line` 图表配置。普通 `docker compose down` 保留 MySQL、HDFS、Metastore 和 Java 数据；`docker compose down -v` 会永久删除这些卷，仅用于刻意重置演示环境。
+预期能力接口显示 `mode=bigdata` 和 `bigDataEnabled=true`；CSV 任务为 `SUCCESS`、`reconciliationStatus=MATCHED`，MySQL/Hive 均为 20 条（8 SALE、12 RENT）；Agent SQL 只能访问活动视图。重复上传完全相同文件返回 409，不产生重复数据。外部步骤失败后可执行 `POST /api/house-imports/{id}/retry`；要回滚到已成功对账的旧版本，执行 `POST /api/house-imports/{oldTaskId}/activate`。
+
+普通 `docker compose down` 会保留 MySQL、HDFS、Metastore 和 Java 数据。`docker compose down -v` 会永久删除这些卷，只能用于明确的开发环境重置。修改 `.env` 不会自动修改 MySQL 内已创建账号的密码；需要重新运行安全配置或显式 `ALTER USER`。不要直接编辑 Docker 卷目录，也不要把真实密码、API Key 写入 CSV、示例或 Git。
 
 ## 13. 智能问数前端与统一入口
 

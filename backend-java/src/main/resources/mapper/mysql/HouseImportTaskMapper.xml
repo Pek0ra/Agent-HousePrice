@@ -10,11 +10,19 @@
         <result property="originalFilename" column="original_filename"/>
         <result property="fileSize" column="file_size"/>
         <result property="fileSha256" column="file_sha256"/>
+        <result property="datasetId" column="dataset_id"/>
+        <result property="importMode" column="import_mode"/>
         <result property="status" column="status"
                 javaType="com.lgcollege.entity.mysql.ImportTaskStatus"/>
         <result property="totalRows" column="total_rows"/>
+        <result property="validRows" column="valid_rows"/>
         <result property="successRows" column="success_rows"/>
         <result property="failedRows" column="failed_rows"/>
+        <result property="mysqlRows" column="mysql_rows"/>
+        <result property="hiveRows" column="hive_rows"/>
+        <result property="hiveAnalysisRows" column="hive_analysis_rows"/>
+        <result property="reconciliationStatus" column="reconciliation_status"/>
+        <result property="previousDatasetId" column="previous_dataset_id"/>
         <result property="hdfsPath" column="hdfs_path"/>
         <result property="errorReportPath" column="error_report_path"/>
         <result property="failureStage" column="failure_stage"
@@ -29,18 +37,20 @@
     </resultMap>
 
     <sql id="TaskColumns">
-        id, original_filename, file_size, file_sha256, status,
-        total_rows, success_rows, failed_rows, hdfs_path, error_report_path,
+        id, original_filename, file_size, file_sha256, dataset_id, import_mode, status,
+        total_rows, valid_rows, success_rows, failed_rows, mysql_rows, hive_rows,
+        hive_analysis_rows, reconciliation_status, previous_dataset_id, hdfs_path, error_report_path,
         failure_stage, retry_count, staging_path, error_message,
         started_at, finished_at, created_at, updated_at
     </sql>
 
     <insert id="insert" useGeneratedKeys="true" keyProperty="id">
         INSERT INTO house_import_task (
-            original_filename, file_size, file_sha256, status, staging_path, started_at
+            original_filename, file_size, file_sha256, dataset_id, import_mode, status,
+            staging_path, previous_dataset_id, started_at
         ) VALUES (
-            #{originalFilename}, #{fileSize}, #{fileSha256}, #{status},
-            #{stagingPath}, CURRENT_TIMESTAMP
+            #{originalFilename}, #{fileSize}, #{fileSha256}, #{datasetId}, 'REPLACE', #{status},
+            #{stagingPath}, #{previousDatasetId}, CURRENT_TIMESTAMP
         )
     </insert>
 
@@ -67,6 +77,13 @@
                                  THEN NULL ELSE error_message END
         WHERE id = #{id}
           AND status = #{expectedStatus}
+    </update>
+
+    <update id="updateReconciliation">
+        UPDATE house_import_task
+        SET valid_rows=#{validRows}, mysql_rows=#{mysqlRows}, hive_rows=#{hiveRows},
+            hive_analysis_rows=#{hiveAnalysisRows}, reconciliation_status=#{reconciliationStatus}
+        WHERE id=#{id}
     </update>
 
     <update id="updateDetails">

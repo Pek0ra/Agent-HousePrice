@@ -6,7 +6,12 @@ $env:BIG_DATA_ENABLED = 'true'
 
 docker compose --profile bigdata up --build -d
 if ($LASTEXITCODE -ne 0) {
-    throw "bigdata Compose 启动失败，退出码：$LASTEXITCODE"
+    throw "bigdata Compose startup failed (exit code: $LASTEXITCODE)"
+}
+
+docker compose wait hive-init
+if ($LASTEXITCODE -ne 0) {
+    throw "Hive initialization failed (exit code: $LASTEXITCODE)"
 }
 
 docker compose --profile bigdata ps -a

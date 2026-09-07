@@ -9,10 +9,18 @@ public class HouseImportTask {
     private String originalFilename;
     private Long fileSize;
     private String fileSha256;
+    private String datasetId;
+    private String importMode;
     private ImportTaskStatus status;
     private Long totalRows;
+    private Long validRows;
     private Long successRows;
     private Long failedRows;
+    private Long mysqlRows;
+    private Long hiveRows;
+    private Long hiveAnalysisRows;
+    private String reconciliationStatus;
+    private String previousDatasetId;
     private String hdfsPath;
     private String errorReportPath;
     private ImportTaskStatus failureStage;
@@ -52,6 +60,11 @@ public class HouseImportTask {
         return fileSha256;
     }
 
+    public String getDatasetId() { return datasetId; }
+    public void setDatasetId(String datasetId) { this.datasetId = datasetId; }
+    public String getImportMode() { return importMode; }
+    public void setImportMode(String importMode) { this.importMode = importMode; }
+
     public void setFileSha256(String fileSha256) {
         this.fileSha256 = fileSha256;
     }
@@ -68,6 +81,9 @@ public class HouseImportTask {
         return totalRows;
     }
 
+    public Long getValidRows() { return validRows; }
+    public void setValidRows(Long validRows) { this.validRows = validRows; }
+
     public void setTotalRows(Long totalRows) {
         this.totalRows = totalRows;
     }
@@ -83,6 +99,17 @@ public class HouseImportTask {
     public Long getFailedRows() {
         return failedRows;
     }
+
+    public Long getMysqlRows() { return mysqlRows; }
+    public void setMysqlRows(Long mysqlRows) { this.mysqlRows = mysqlRows; }
+    public Long getHiveRows() { return hiveRows; }
+    public void setHiveRows(Long hiveRows) { this.hiveRows = hiveRows; }
+    public Long getHiveAnalysisRows() { return hiveAnalysisRows; }
+    public void setHiveAnalysisRows(Long hiveAnalysisRows) { this.hiveAnalysisRows = hiveAnalysisRows; }
+    public String getReconciliationStatus() { return reconciliationStatus; }
+    public void setReconciliationStatus(String reconciliationStatus) { this.reconciliationStatus = reconciliationStatus; }
+    public String getPreviousDatasetId() { return previousDatasetId; }
+    public void setPreviousDatasetId(String previousDatasetId) { this.previousDatasetId = previousDatasetId; }
 
     public void setFailedRows(Long failedRows) {
         this.failedRows = failedRows;

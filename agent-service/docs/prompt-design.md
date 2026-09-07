@@ -83,7 +83,7 @@
 
 当前安全措施：
 
-1. MySQL 模型只能看到 `v_agent_house_listing`、`v_agent_district_summary` 和 `v_agent_monthly_price_trend`；Hive 模型只能看到 `house_info_analysis` 和 `house_data_quality_summary`。
+1. MySQL 模型只能看到 `v_agent_house_listing`、`v_agent_district_summary` 和 `v_agent_monthly_price_trend`；Hive 模型只能看到当前激活数据集视图 `v_agent_house_info_analysis` 和 `v_agent_house_data_quality_summary`。
 2. SQLGlot 根据路由结果以 MySQL 或 Hive 方言解析 AST，只接受单条查询语句，并从 AST 检查对应数据源的表白名单。
 3. 拒绝写操作、DDL、无控制的 `SELECT *`、多语句、跨库限定名、SQL 注释、文件导出、锁定读取和常见延时函数。
 4. 缺失 `LIMIT` 时自动增加 `LIMIT 100`，过大的 LIMIT 会改写为 100；MySQL 数据库会话另设 5 秒执行超时。

@@ -60,12 +60,12 @@ def test_allows_count_star(validator: SqlValidator) -> None:
 
 
 def test_hive_dialect_allows_read_only_offline_query() -> None:
-    validator = SqlValidator({"house_info_analysis"}, dialect="hive")
+    validator = SqlValidator({"v_agent_house_info_analysis"}, dialect="hive")
 
     sql = validator.validate_and_normalize(
         "SELECT listing_month, AVG(unit_price) AS avg_unit_price "
-        "FROM house_info_analysis GROUP BY listing_month"
+        "FROM v_agent_house_info_analysis GROUP BY listing_month"
     )
 
-    assert "house_info_analysis" in sql
+    assert "v_agent_house_info_analysis" in sql
     assert "LIMIT 100" in sql

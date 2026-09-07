@@ -64,6 +64,41 @@
             text-align: right;
         }
 
+        .topbar-actions {
+            display: flex;
+            align-items: flex-end;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .agent-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            min-height: 42px;
+            padding: 10px 16px;
+            border: 1px solid rgba(255, 255, 255, .2);
+            border-radius: 9px;
+            color: #123047;
+            background: #f4aa4e;
+            box-shadow: 0 9px 24px rgba(0, 0, 0, .18);
+            font-size: 13px;
+            font-weight: 800;
+            text-decoration: none;
+            transition: transform .18s, background .18s, box-shadow .18s;
+        }
+
+        .agent-link:hover {
+            transform: translateY(-1px);
+            background: #ffc06f;
+            box-shadow: 0 12px 28px rgba(0, 0, 0, .23);
+        }
+
+        .agent-link:focus-visible {
+            outline: 3px solid rgba(143, 213, 205, .55);
+            outline-offset: 3px;
+        }
+
         .page {
             width: min(1320px, calc(100% - 32px));
             margin: 24px auto 48px;
@@ -201,6 +236,7 @@
         @media (max-width: 900px) {
             .brand-row, .toolbar { align-items: stretch; flex-direction: column; }
             .top-note { text-align: left; }
+            .topbar-actions { align-items: flex-start; }
             .actions { margin-left: 0; }
             .metrics { grid-template-columns: repeat(2, 1fr); }
             .dashboard-grid { grid-template-columns: 1fr; }
@@ -223,9 +259,14 @@
             <p class="eyebrow">House Data Intelligence</p>
             <h1>房价数据分析中心</h1>
         </div>
-        <p class="top-note">
-            local 模式使用 MySQL 实时统计；bigdata 模式启用 Hive 分析与数据导入能力。
-        </p>
+        <div class="topbar-actions">
+            <p class="top-note">
+                local 模式使用 MySQL 实时统计；bigdata 模式启用 Hive 分析与数据导入能力。
+            </p>
+            <a class="agent-link" href="http://localhost/">
+                <span>←</span> 返回智能问数中心
+            </a>
+        </div>
     </div>
 </header>
 
