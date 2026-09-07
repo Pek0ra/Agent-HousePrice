@@ -7,7 +7,7 @@ import type { Conversation } from './types'
 
 const STORAGE_KEY = 'house-price-agent-conversations-v1'
 const suggestions = [
-  '上海浦东三室一厅的平均租金是多少？',
+  '上海浦东三室一厅的平均房价是多少？',
   '北京各区平均房价最高的五个区是哪几个？',
   '上海历史房价月度趋势如何？',
   '哪个区性价比最高？',
