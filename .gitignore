@@ -15,3 +15,5 @@ dist/
 # Local runtime data
 data/*
 !data/house_listings.csv
+agent-service/data/
+evaluation-results/

@@ -4,6 +4,8 @@
 
 项目的初衷不是简单地让大模型“直接连库”，而是探索一条可解释、可审计、可控制的智能问数路径：业务指标由知识库约束，模型生成的 SQL 经过 AST 安全校验，数据库账号遵循最小权限原则，每次查询均带有执行信息和审计记录。同时，项目兼顾日常业务查询和离线分析两类场景，可在轻量的 MySQL 模式与包含 HDFS/Hive 的大数据模式之间切换。
 
+开发过程中遇到的典型故障、根因分析、修复方案和验证过程见 [开发问题复盘与解决方案](docs/development-troubleshooting.md)。
+
 ## 主要功能
 
 - 中文自然语言问数，返回数据结论、SQL、结果表格和 ECharts 图表。
@@ -13,7 +15,8 @@
 - SALE/RENT 混合 CSV 校验、导入、任务查询、失败重试和历史数据集回滚。
 - 版本化数据集：新数据通过 MySQL/Hive 对账后才切换为活动版本。
 - SQLGlot AST 校验、白名单视图、查询限行、执行超时、有限修复及独立审计账号。
-- React 问数工作台，保留最近 30 条浏览器本地会话，并展示数据源、耗时、选表、重试次数和 trace ID。
+- 基于 SQLite checkpoint 的 `thread_id` 多轮问数，支持地域替换、条件追加、指标覆盖和澄清后继续。
+- React 问数工作台按会话保存独立 `thread_id` 和多轮消息，保留最近 30 个会话（每个最多 50 轮），支持切换、删除和失败原位重试，并展示数据源、耗时、选表、重试次数和 trace ID。
 - Docker Compose 一键运行核心服务，并可按需启用 HDFS/Hive。
 
 ## 系统架构
@@ -105,6 +108,9 @@ OPENAI_BASE_URL=
 | `SQL_MAX_ROWS` | `100` | Agent 查询最大返回行数 |
 | `SQL_EXECUTION_TIMEOUT_MS` | `5000` | MySQL 查询超时毫秒数 |
 | `SQL_MAX_REPAIR_ATTEMPTS` | `1` | SQL 生成失败后的最大修复次数，程序上限为 2 |
+| `CHECKPOINT_DB_PATH` | 容器内为 `/data/checkpoints/agent_checkpoints.sqlite` | LangGraph SQLite checkpoint 文件 |
+| `CONVERSATION_HISTORY_MAX_MESSAGES` | `8` | 每个 thread 保留的最近简洁消息数，程序范围 2～10 |
+| `CONVERSATION_HISTORY_MAX_CHARS` | `6000` | 上下文历史字符上限，程序范围 1000～12000 |
 | `SPRING_PROFILES_ACTIVE` | `local` | Java 运行模式：`local` 或 `bigdata` |
 | `BIG_DATA_ENABLED` | `false` | 是否启用 HDFS/Hive 路由和相关 Bean |
 | `JAVA_MAVEN_PROFILE` | `local` | Java 镜像构建时是否打包 Hive/Hadoop 依赖 |
@@ -178,19 +184,30 @@ docker compose --profile bigdata ps -a
 - `上海历史房价月度趋势如何？`（历史分析建议使用 bigdata 模式）
 - `哪个区性价比最高？`（指标口径不明确时，Agent 会先请求澄清）
 
-页面中可以核验最终结论、查询结果、图表、生成的 SQL、数据源、选中的表/视图、执行耗时、修复次数和 trace ID。最近 30 条会话只保存在当前浏览器的 `localStorage`，不是服务端会话。
+页面中可以核验最终结论、查询结果、图表、生成的 SQL、数据源、选中的表/视图、执行耗时、修复次数和 trace ID。每个浏览器会话独立保存自己的 `thread_id` 与 `turns`；刷新和切换后不会串线，“新建会话”的下一问不携带旧线程。最近 30 个会话可逐条删除，真正的上下文仍由服务端 LangGraph checkpoint 保存。
 
 ### 2. 直接调用 Agent API
 
-通过 Nginx 统一入口调用：
+通过 Nginx 统一入口调用。第一轮不传 `thread_id`：
 
 ```powershell
-$body = @{ message = '北京各区平均房价最高的五个区是哪几个？' } | ConvertTo-Json
+$firstBody = @{ message = '上海浦东新区出租房平均月租金是多少？' } | ConvertTo-Json
+$first = Invoke-RestMethod `
+  -Method Post `
+  -Uri http://localhost/api/agent/chat `
+  -ContentType 'application/json; charset=utf-8' `
+  -Body ([System.Text.Encoding]::UTF8.GetBytes($firstBody))
+
+# 第二轮传回第一轮响应中的 thread_id，真正继承上一轮指标和查询类型。
+$secondBody = @{
+  thread_id = $first.thread_id
+  message = '那深圳南山区呢？'
+} | ConvertTo-Json
 Invoke-RestMethod `
   -Method Post `
   -Uri http://localhost/api/agent/chat `
   -ContentType 'application/json; charset=utf-8' `
-  -Body ([System.Text.Encoding]::UTF8.GetBytes($body)) | ConvertTo-Json -Depth 12
+  -Body ([System.Text.Encoding]::UTF8.GetBytes($secondBody)) | ConvertTo-Json -Depth 12
 ```
 
 也可直接请求 `POST http://localhost:8000/api/v1/chat`。典型响应包含：
@@ -202,6 +219,7 @@ Invoke-RestMethod `
   "columns": ["district", "avg_unit_price"],
   "rows": [["示例区", 50000.0]],
   "chart": null,
+  "thread_id": "会话 UUID，多轮保持不变",
   "trace_id": "...",
   "details": {
     "data_source": "mysql",
@@ -209,10 +227,16 @@ Invoke-RestMethod `
     "selected_tables": ["v_agent_district_summary"],
     "retrieved_metrics": [],
     "row_count": 1,
-    "retry_count": 0
+    "retry_count": 0,
+    "used_history": true,
+    "inherited_fields": ["metric", "listing_type", "intent"],
+    "overridden_fields": ["cities", "districts"],
+    "context_resolution_duration_ms": 0
   }
 }
 ```
+
+`thread_id` 标识一个可持续的对话，客户端在后续请求中复用；`trace_id` 只标识一次执行，每轮都会重新生成，不能拿它继续会话。不传 `thread_id` 就会创建新会话。自定义 `thread_id` 只能包含字母、数字、下划线和连字符，最长 64 个字符。
 
 ### 3. 使用 Java 业务接口
 
@@ -292,6 +316,8 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 编辑 `agent-service/.env`，将 `MYSQL_PORT` 设置为宿主机实际映射端口（根目录示例为 `3307`），并填写 `house_agent_ro`、`house_agent_audit` 对应密码和模型配置。上述数据库账号由 Compose 的 `mysql-agent-security` 初始化任务创建。
 
+本地 checkpoint 默认写入 `agent-service/data/checkpoints/agent_checkpoints.sqlite`。Docker 使用命名卷 `agent-house-price-agent-checkpoints` 挂载 `/data/checkpoints`，因此重建 Agent 容器后同一 `thread_id` 仍能恢复。不要提交该 SQLite 文件。
+
 ### 前端
 
 ```powershell
@@ -313,12 +339,14 @@ React 工作台负责问题输入、会话历史、答案表格和图表展示�
 `agent-service/app/agents/mysql_agent.py` 使用 LangGraph 将问数过程拆成可控节点：
 
 ```text
-意图识别 → 数据源选择 → 问题结构化 → 业务知识检索
+本轮初始化 → 上下文解析 → 意图识别 → 数据源选择 → 问题结构化 → 业务知识检索
         → 查询计划 → SQL 生成 → AST 校验 → 执行
-        → 结果检查 → 必要时有限修复 → 答案/图表生成 → 审计
+        → 结果检查 → 必要时有限修复 → 答案/图表生成 → 压缩会话状态 → 审计
 ```
 
-对于危险请求、不支持的问题或缺少关键口径的问题，工作流会拒绝或澄清，而不是强行生成 SQL。成功响应同时返回原始查询结果与执行元数据，方便前端展示、问题定位和离线评测。
+LangGraph 官方 SQLite checkpointer 按 `thread_id` 恢复结构化槽位。每轮开始都会清空旧 SQL、查询结果、错误、图表和重试次数；上下文节点只继承城市、区域、房源类型、指标、户型、时间、排名和意图等必要字段。当前轮完整问题会建立新任务上下文，危险原文和解析后问题都会重新检查。对于危险请求、不支持的问题或缺少关键口径的问题，工作流会拒绝或澄清，而不是强行生成 SQL。
+
+历史窗口最多保留最近 8 条简洁的用户/助手消息、单条最多 1000 字符且总计最多 6000 字符。`query_result` 使用 LangGraph `UntrackedValue`，rows 只在当前执行中流转，不写入 SQLite checkpoint；查询本身仍受 `SQL_MAX_ROWS` 限制。SQLite 适合单机作品演示，不适合多个 Agent 副本并发共享；多实例部署应改用 PostgreSQL、Redis 等共享 checkpointer。
 
 ### 业务语义 RAG 层
 
@@ -402,7 +430,7 @@ Invoke-WebRequest http://localhost/health -UseBasicParsing
 
 ### Agent 评测
 
-根目录 `agent-evaluation-dataset.jsonl` 提供覆盖查询、澄清、数据源路由和安全攻击等场景的评测集。评测时应固定 `data/house_listings.csv` 数据快照，记录每条请求的原始响应，并考察 SQL 可执行性、结果正确性、答案忠实度、数据源选择、危险请求拒绝、延迟、模型调用和回归情况。详细字段和判定标准见 [AGENT_EVALUATION.md](./AGENT_EVALUATION.md)。
+根目录 `agent-evaluation-dataset.jsonl` 当前包含 88 个快照绑定用例（80 个原分组用例 + 8 个连续对话用例）。可运行 `cd agent-service; .\.venv\Scripts\python.exe -m app.evaluation --dataset ..\agent-evaluation-dataset.jsonl --base-url http://localhost:8000/api/v1/chat --output-dir ..\evaluation-results --max-cases 3` 做少量 smoke；完整运行会产生模型费用。报告、baseline、Token 与费用配置见 [AGENT_EVALUATION.md](./AGENT_EVALUATION.md)。
 
 ## 进一步阅读
 

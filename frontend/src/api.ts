@@ -1,10 +1,10 @@
 import type { ChatResponse } from './types'
 
-export async function askAgent(message: string): Promise<ChatResponse> {
+export async function askAgent(message: string, threadId?: string | null): Promise<ChatResponse> {
   const response = await fetch('/api/agent/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json; charset=utf-8' },
-    body: JSON.stringify({ message }),
+    body: JSON.stringify(threadId ? { message, thread_id: threadId } : { message }),
   })
 
   if (!response.ok) {

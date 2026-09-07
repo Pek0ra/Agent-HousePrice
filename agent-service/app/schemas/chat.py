@@ -8,6 +8,22 @@ class HealthResponse(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=2000)
+    thread_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$",
+        description="Safe conversation identifier returned by an earlier response.",
+    )
+
+
+class ContextResolution(BaseModel):
+    depends_on_history: bool
+    standalone_question: str
+    inherited_fields: list[str] = Field(default_factory=list)
+    overridden_fields: list[str] = Field(default_factory=list)
+    unresolved_reference: bool = False
+    clarification_question: str | None = None
 
 
 class RetrievedMetric(BaseModel):
@@ -23,6 +39,14 @@ class ExecutionDetails(BaseModel):
     retrieved_metrics: list[RetrievedMetric] = Field(default_factory=list)
     row_count: int = 0
     retry_count: int = 0
+    used_history: bool = False
+    inherited_fields: list[str] = Field(default_factory=list)
+    overridden_fields: list[str] = Field(default_factory=list)
+    context_resolution_duration_ms: int = 0
+    model_calls: int = 0
+    prompt_tokens: int | None = 0
+    completion_tokens: int | None = 0
+    total_tokens: int | None = 0
 
 
 class ChatResponse(BaseModel):
@@ -32,6 +56,7 @@ class ChatResponse(BaseModel):
     rows: list[list[Any]]
     chart: dict[str, Any] | None = None
     trace_id: str
+    thread_id: str
     details: ExecutionDetails = Field(default_factory=ExecutionDetails)
 
 

@@ -2,8 +2,9 @@
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PYTHONUNBUFFERED=1
+
+ARG PIP_INDEX_URL=https://pypi.org/simple
 
 WORKDIR /app
 
@@ -13,12 +14,13 @@ COPY pyproject.toml ./
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     mkdir -p app && touch app/__init__.py && \
-    python -m pip install --upgrade pip && \
-    python -m pip install .
+    python -m pip install --index-url "$PIP_INDEX_URL" --upgrade pip && \
+    python -m pip install --index-url "$PIP_INDEX_URL" .
 
 COPY app ./app
 
-RUN python -m pip install --no-deps .
+RUN python -m pip install --no-deps . && \
+    mkdir -p /data/checkpoints && chown -R agent:agent /data
 
 USER agent
 

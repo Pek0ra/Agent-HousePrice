@@ -1,8 +1,9 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.requests import Request
 from starlette.responses import Response
 
+from app.agents.mysql_agent import AgentCheckpointError
 from app.api.routes import router
 from app.config import settings
 
@@ -32,6 +33,13 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     application.middleware("http")(add_json_utf8_charset)
+
+    @application.exception_handler(AgentCheckpointError)
+    async def checkpoint_error_handler(
+        request: Request, exc: AgentCheckpointError
+    ) -> JSONResponse:
+        return JSONResponse(status_code=503, content={"detail": str(exc)})
+
     application.include_router(router)
     return application
 

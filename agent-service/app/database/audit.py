@@ -39,6 +39,15 @@ class MysqlAuditRepository:
         repair_count: int,
         duration_ms: int,
         error_summary: str | None,
+        thread_id: str | None,
+        used_history: bool,
+        inherited_fields: list[str],
+        overridden_fields: list[str],
+        context_resolution_duration_ms: int,
+        model_calls: int,
+        prompt_tokens: int | None,
+        completion_tokens: int | None,
+        total_tokens: int | None,
     ) -> None:
         values = {
             "trace_id": trace_id,
@@ -49,16 +58,37 @@ class MysqlAuditRepository:
             "repair_count": repair_count,
             "duration_ms": duration_ms,
             "error_summary": error_summary[:1000] if error_summary else None,
+            "thread_id": thread_id,
+            "used_history": used_history,
+            "inherited_fields": json.dumps(inherited_fields, ensure_ascii=False),
+            "overridden_fields": json.dumps(overridden_fields, ensure_ascii=False),
+            "context_resolution_duration_ms": context_resolution_duration_ms,
+            "model_calls": model_calls,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
         }
         with self._engine.begin() as connection:
             connection.execute(
                 text(
                     "INSERT INTO agent_query_audit "
                     "(trace_id, question, generated_sql, status, result_rows, "
-                    "repair_count, duration_ms, error_summary) "
+                    "repair_count, duration_ms, error_summary, thread_id, used_history, "
+                    "inherited_fields, overridden_fields, context_resolution_duration_ms, "
+                    "model_calls, prompt_tokens, completion_tokens, total_tokens) "
                     "VALUES (:trace_id, :question, :generated_sql, :status, "
-                    ":result_rows, :repair_count, :duration_ms, :error_summary)"
+                    ":result_rows, :repair_count, :duration_ms, :error_summary, "
+                    ":thread_id, :used_history, :inherited_fields, :overridden_fields, "
+                    ":context_resolution_duration_ms, :model_calls, :prompt_tokens, "
+                    ":completion_tokens, :total_tokens)"
                 ),
                 values,
             )
-        logger.info("agent_query_audit=%s", json.dumps(values, ensure_ascii=False))
+        logger.info(
+            "agent_query_audit trace_id=%s thread_id=%s status=%s rows=%s used_history=%s",
+            trace_id,
+            thread_id,
+            status,
+            result_rows,
+            used_history,
+        )

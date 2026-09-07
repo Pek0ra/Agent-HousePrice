@@ -39,6 +39,15 @@ class Settings:
     sql_max_repair_attempts: int = min(
         2, max(0, int(os.getenv("SQL_MAX_REPAIR_ATTEMPTS", "1")))
     )
+    checkpoint_db_path: str = os.getenv(
+        "CHECKPOINT_DB_PATH", "data/checkpoints/agent_checkpoints.sqlite"
+    )
+    conversation_history_max_messages: int = min(
+        10, max(2, int(os.getenv("CONVERSATION_HISTORY_MAX_MESSAGES", "8")))
+    )
+    conversation_history_max_chars: int = min(
+        12000, max(1000, int(os.getenv("CONVERSATION_HISTORY_MAX_CHARS", "6000")))
+    )
     big_data_enabled: bool = _env_bool("BIG_DATA_ENABLED")
     hive_host: str = os.getenv("HIVE_HOST", "127.0.0.1")
     hive_port: int = int(os.getenv("HIVE_PORT", "10001"))

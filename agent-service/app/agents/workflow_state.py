@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, Literal, TypedDict
+from typing import Annotated, Any, Literal, TypedDict
+
+from langgraph.channels import UntrackedValue
 
 Intent = Literal[
     "listing_search",
@@ -28,7 +30,16 @@ class QueryResult(TypedDict):
 
 
 class AgentWorkflowState(TypedDict, total=False):
-    question: str
+    # Thread-scoped fields persisted by the LangGraph checkpointer.
+    thread_id: str
+    messages: list[dict[str, str]]
+    conversation_context: dict[str, Any]
+    previous_structured_question: dict[str, Any]
+    pending_question: str | None
+
+    # Turn-scoped fields. prepare_turn must reset every field in this section.
+    current_question: str
+    resolved_question: str
     trace_id: str
     data_source: DataSource
     intent: Intent
@@ -40,10 +51,14 @@ class AgentWorkflowState(TypedDict, total=False):
     query_plan: dict[str, Any]
     generated_sql: str
     validation_result: ValidationResult
-    query_result: QueryResult
+    query_result: Annotated[QueryResult | None, UntrackedValue]
     retry_count: int
     final_answer: str
     chart_config: dict[str, Any] | None
     needs_clarification: bool
     clarification_question: str | None
     error: str
+    raw_unsafe_detected: bool
+    context_resolution: dict[str, Any]
+    context_resolution_duration_ms: int
+    model_usage: dict[str, Any]

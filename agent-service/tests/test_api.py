@@ -1,12 +1,14 @@
+import pytest
 from fastapi.testclient import TestClient
 
+from app.agents.mysql_agent import AgentCheckpointError
 from app.api.dependencies import get_mysql_agent
 from app.main import app
 from app.schemas.chat import ChatResponse
 
 
 class FakeAgent:
-    def ask(self, question: str) -> ChatResponse:
+    def ask(self, question: str, thread_id: str | None = None) -> ChatResponse:
         return ChatResponse(
             answer="浦东新区三室一厅挂牌房源平均月租金约为 8500 元/月。",
             sql=(
@@ -19,6 +21,7 @@ class FakeAgent:
             rows=[[8500.0]],
             chart=None,
             trace_id="test-trace-id",
+            thread_id=thread_id or "generated-thread-id",
         )
 
 client = TestClient(app)
@@ -47,6 +50,7 @@ def test_chat_returns_query_result_contract() -> None:
     assert body["rows"] == [[8500.0]]
     assert body["chart"] is None
     assert body["trace_id"] == "test-trace-id"
+    assert body["thread_id"] == "generated-thread-id"
     assert body["details"]["data_source"] == "none"
     assert body["details"]["duration_ms"] == 0
     assert body["sql"].startswith("SELECT")
@@ -59,3 +63,41 @@ def test_chat_rejects_an_empty_message() -> None:
 
     assert response.status_code == 422
     assert response.headers["content-type"] == "application/json; charset=utf-8"
+
+
+def test_chat_continues_the_supplied_thread() -> None:
+    app.dependency_overrides[get_mysql_agent] = lambda: FakeAgent()
+    try:
+        response = client.post(
+            "/api/v1/chat",
+            json={"message": "那深圳南山区呢？", "thread_id": "thread_123"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["thread_id"] == "thread_123"
+
+
+@pytest.mark.parametrize("thread_id", ["../checkpoint.db", "a/b", "x" * 65])
+def test_chat_rejects_unsafe_thread_ids(thread_id: str) -> None:
+    response = client.post(
+        "/api/v1/chat", json={"message": "查询上海房价", "thread_id": thread_id}
+    )
+
+    assert response.status_code == 422
+
+
+def test_checkpoint_failure_returns_a_safe_service_error() -> None:
+    def broken_checkpoint_agent():
+        raise AgentCheckpointError("会话状态暂时无法读取或保存，请稍后重试。")
+
+    app.dependency_overrides[get_mysql_agent] = broken_checkpoint_agent
+    try:
+        response = client.post("/api/v1/chat", json={"message": "查询上海房价"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "会话状态暂时无法读取或保存，请稍后重试。"}
+    assert "Traceback" not in response.text
