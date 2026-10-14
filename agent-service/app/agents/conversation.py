@@ -4,6 +4,7 @@ import re
 from typing import Any
 
 from app.schemas.chat import ContextResolution
+from app.schemas.chat import QuestionSlots
 
 CITY_ALIASES = {
     "北京": "北京市",
@@ -123,6 +124,44 @@ def normalize_question(question: str) -> str:
     return normalized
 
 
+def validate_question_slots(slots: QuestionSlots) -> dict[str, Any]:
+    """Normalize model-extracted values before they can enter a plan or thread context."""
+    result: dict[str, Any] = {}
+    for field, aliases in (("cities", CITY_ALIASES), ("districts", DISTRICT_ALIASES)):
+        values = getattr(slots, field)
+        if len(values) > 4 or any(not re.fullmatch(r"[\u4e00-\u9fff]{2,12}", value) for value in values):
+            raise ValueError("Invalid location slot")
+        if values:
+            result[field] = _ordered_unique([aliases.get(value, value) for value in values])
+    if slots.metric is not None:
+        if slots.metric not in {"listing", "listing_count", "unit_price", "total_price", "monthly_rent"}:
+            raise ValueError("Invalid metric slot")
+        result["metric"] = slots.metric
+    if slots.listing_type is not None:
+        if slots.listing_type not in {"SALE", "RENT"}:
+            raise ValueError("Invalid listing type")
+        result["listing_type"] = slots.listing_type
+    for field in ("bedroom_count", "living_room_count"):
+        value = getattr(slots, field)
+        if value is not None:
+            if not 0 <= value <= 20:
+                raise ValueError("Invalid layout slot")
+            result[field] = value
+    for field in ("start_month", "end_month"):
+        value = getattr(slots, field)
+        if value is not None:
+            if not re.fullmatch(r"(?:19|20)\d{2}-(?:0[1-9]|1[0-2])", value):
+                raise ValueError("Invalid month slot")
+            result[field] = value
+    if result.get("start_month") and result.get("end_month") and result["start_month"] > result["end_month"]:
+        raise ValueError("Invalid month range")
+    if slots.ranking_limit is not None:
+        if not 1 <= slots.ranking_limit <= 100:
+            raise ValueError("Invalid ranking limit")
+        result["ranking_limit"] = slots.ranking_limit
+    return result
+
+
 def _new_context() -> dict[str, Any]:
     return {
         "cities": [],
@@ -182,6 +221,8 @@ def _render_standalone(context: dict[str, Any]) -> str:
         return f"查询{location_text}{listing_text}{metric_text}排名前{limit}名{room_text}{time_text}。"
     if intent == "trend":
         return f"查询{location_text}{listing_text}{metric_text}的月度趋势{room_text}{time_text}。"
+    if intent == "data_quality":
+        return "查询当前导入数据集的数据质量。"
     if intent == "listing_search" or context.get("metric") == "listing":
         return f"列出{location_text}{listing_text}{room_text}{time_text}。"
     return f"查询{location_text}{listing_text}的{metric_text}{room_text}{time_text}。"
@@ -192,13 +233,15 @@ def resolve_conversation_context(
     previous_context: dict[str, Any] | None,
     *,
     unsafe: bool = False,
+    explicit_slots: dict[str, Any] | None = None,
+    depends_on_history: bool | None = None,
 ) -> tuple[ContextResolution, dict[str, Any]]:
     old = {**_new_context(), **(previous_context or {})}
-    explicit = extract_explicit_slots(question)
+    explicit = extract_explicit_slots(question) if explicit_slots is None else explicit_slots
     has_history = bool(old.get("previous_question") or old.get("pending_clarification"))
     complete_new = _is_complete_new_question(question, explicit)
     dependent_marker = bool(DEPENDENCY_PATTERN.search(question))
-    depends = bool(has_history and not unsafe and (dependent_marker or old.get("pending_clarification")))
+    depends = bool(has_history and not unsafe and (dependent_marker or old.get("pending_clarification"))) if depends_on_history is None else bool(has_history and not unsafe and depends_on_history)
 
     if unsafe:
         resolution = ContextResolution(
@@ -211,7 +254,7 @@ def resolve_conversation_context(
         )
         return resolution, old
 
-    if complete_new:
+    if depends_on_history is None and complete_new:
         depends = False
 
     if not has_history or not depends:
@@ -278,7 +321,7 @@ def resolve_conversation_context(
 
     unresolved = bool(
         has_history
-        and dependent_marker
+        and (dependent_marker if depends_on_history is None else depends)
         and not explicit
         and re.search(r"(这个|那个|这些|上述|那里|那边)", question)
     )

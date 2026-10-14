@@ -47,6 +47,37 @@ class ExecutionDetails(BaseModel):
     prompt_tokens: int | None = 0
     completion_tokens: int | None = 0
     total_tokens: int | None = 0
+    route_suggestion: dict[str, Any] | None = None
+    route_reason: str | None = None
+    route_reviewed: bool = False
+    route_duration_ms: int = 0
+    allowed_tools: list[str] = Field(default_factory=list)
+    tool_model_calls: int = 0
+    tool_call_count: int = 0
+    successful_queries: int = 0
+
+
+class QuestionSlots(BaseModel):
+    """Only explicit filters from the current user question; omitted means inherit if dependent."""
+    cities: list[str] = Field(default_factory=list)
+    districts: list[str] = Field(default_factory=list)
+    listing_type: str | None = None
+    metric: str | None = None
+    bedroom_count: int | None = None
+    living_room_count: int | None = None
+    start_month: str | None = None
+    end_month: str | None = None
+    ranking_limit: int | None = None
+    clear_districts: bool = False
+    clear_layout: bool = False
+    clear_months: bool = False
+
+
+class RouteReview(BaseModel):
+    intent: str
+    scope: str
+    depends_on_previous: bool
+    multiple_tasks: bool
 
 
 class ChatResponse(BaseModel):

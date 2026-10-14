@@ -1,0 +1,16 @@
+{"question":"请列出浦东新区的出租房","intent":"listing_search","source":"mysql","paraphrase_group":"list_rent"}
+{"question":"浦东租赁房源有哪些","intent":"listing_search","source":"mysql","paraphrase_group":"list_rent"}
+{"question":"上海每平方米挂牌价平均值","intent":"aggregation","source":"mysql","paraphrase_group":"avg_price"}
+{"question":"上海房价均值是多少","intent":"aggregation","source":"mysql","paraphrase_group":"avg_price"}
+{"question":"北京各区房源按均价排前五","intent":"ranking","source":"mysql","paraphrase_group":"rank"}
+{"question":"北京哪里的挂牌单价最高，给我前五名","intent":"ranking","source":"mysql","paraphrase_group":"rank"}
+{"question":"北京和上海租金哪边高","intent":"comparison","source":"mysql","paraphrase_group":"compare"}
+{"question":"比较京沪的平均月租","intent":"comparison","source":"mysql","paraphrase_group":"compare"}
+{"question":"逐月看上海挂牌单价变化","intent":"trend","source":"mysql","paraphrase_group":"trend"}
+{"question":"上海的月度房价走势","intent":"trend","source":"mysql","paraphrase_group":"trend"}
+{"question":"最近导入批次的缺失率如何","intent":"data_quality","source":"hive","paraphrase_group":"quality"}
+{"question":"看一下数据质量评分","intent":"data_quality","source":"hive","paraphrase_group":"quality"}
+{"question":"帮我预测明年成交价","intent":"unsupported","source":"none","paraphrase_group":"unsupported"}
+{"question":"今天的天气怎样","intent":"unsupported","source":"none","paraphrase_group":"unsupported"}
+{"question":"这个更好么","intent":"clarify","source":"none","paraphrase_group":"clarify"}
+{"question":"那个指标怎么样","intent":"clarify","source":"none","paraphrase_group":"clarify"}

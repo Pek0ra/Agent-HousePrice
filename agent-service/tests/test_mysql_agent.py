@@ -9,8 +9,12 @@ from app.agents.mysql_agent import (
     MysqlNaturalLanguageAgent,
 )
 from app.config import Settings
-from app.schemas.chat import AnswerDraft, QueryPlan
-from langchain_core.messages import AIMessage
+from app.schemas.chat import AnswerDraft, QueryPlan, QuestionSlots, RouteReview
+from app.agents.jev_router import RouteSuggestion
+from app.agents.conversation import extract_explicit_slots
+from app.database.mysql import ALLOWED_COLUMNS
+from app.database.hive import HIVE_ALLOWED_COLUMNS
+from langchain_core.messages import AIMessage, ToolMessage
 
 
 class FakeDatabase:
@@ -29,7 +33,11 @@ class FakeDatabase:
 
     def describe_allowed_schema(self) -> str:
         self.schema_load_count += 1
-        return "TABLE v_agent_house_listing COLUMNS: monthly_rent DECIMAL"
+        return "\n\n".join(
+            f"TABLE {table}\nDESCRIPTION: test\nCOLUMNS: " +
+            ", ".join(f"{column} DECIMAL" for column in columns)
+            for table, columns in ALLOWED_COLUMNS.items()
+        )
 
     def execute_read_only(self, sql: str):
         self.executed_sql = sql
@@ -42,11 +50,16 @@ class FakeHiveDatabase(FakeDatabase):
 
     def describe_allowed_schema(self) -> str:
         self.schema_load_count += 1
-        return "TABLE v_agent_house_info_analysis COLUMNS: listing_month STRING, unit_price DECIMAL"
+        return "\n\n".join(
+            f"TABLE {table}\nDESCRIPTION: test\nCOLUMNS: " +
+            ", ".join(f"{column} DECIMAL" for column in columns)
+            for table, columns in HIVE_ALLOWED_COLUMNS.items()
+        )
 
 
 class FakeStructuredModel:
-    def __init__(self, plans: list[QueryPlan], answer: str = "平均月租金为8500元/月。", usage_metadata: dict | None = None) -> None:
+    def __init__(self, plans: list[QueryPlan], answer: str = "平均月租金为8500元/月。", usage_metadata: dict | None = None,
+                 reviews: list[RouteReview] | None = None) -> None:
         self.plans = deque(plans)
         self.answer = answer
         self.schema = None
@@ -54,17 +67,43 @@ class FakeStructuredModel:
         self.message_batches = []
         self.usage_metadata = usage_metadata
         self.include_raw = False
+        self.reviews = deque(reviews or [])
+        self.bound_tool_names = []
+        self.tool_result_batches = []
 
     def with_structured_output(self, schema, **kwargs):
         self.schema = schema
         self.include_raw = kwargs.get("include_raw", False)
         return self
 
+    def bind_tools(self, tools, **kwargs):
+        self.schema = None
+        self.bound_tool_names.append(tuple(tool.name for tool in tools))
+        return self
+
     def invoke(self, messages):
         self.invoke_count += 1
         self.message_batches.append(messages)
-        if self.schema is QueryPlan: parsed = self.plans.popleft()
+        if self.schema is None:
+            if isinstance(messages[-1], ToolMessage):
+                self.tool_result_batches.append(messages)
+                import json
+                result = json.loads(messages[-1].content)
+                if result["ok"]:
+                    return AIMessage(content=self.answer, usage_metadata=self.usage_metadata)
+            plan = self.plans.popleft() if self.plans else QueryPlan(needs_clarification=True, clarification_question="请明确查询条件。")
+            if plan.needs_clarification:
+                return AIMessage(content=plan.clarification_question or "请明确查询条件。", usage_metadata=self.usage_metadata)
+            tool_name = "query_hive_readonly" if "hive" in self.bound_tool_names[-1][-1] else "query_mysql_readonly"
+            return AIMessage(content="", tool_calls=[{"name": tool_name, "args": {"sql": plan.sql or ""},
+                "id": f"call_{self.invoke_count}"}], usage_metadata=self.usage_metadata)
+        elif self.schema is QueryPlan: parsed = self.plans.popleft()
         elif self.schema is AnswerDraft: parsed = AnswerDraft(answer=self.answer)
+        elif self.schema is QuestionSlots:
+            explicit = extract_explicit_slots(messages[-1].content)
+            explicit.pop("intent", None)
+            parsed = QuestionSlots(**explicit)
+        elif self.schema is RouteReview: parsed = self.reviews.popleft()
         else: raise AssertionError(f"Unexpected structured schema: {self.schema}")
         if self.include_raw and self.usage_metadata is not None:
             return {"parsed": parsed, "raw": AIMessage(content="", usage_metadata=self.usage_metadata), "parsing_error": None}
@@ -83,6 +122,102 @@ def _settings() -> Settings:
     return Settings(openai_api_key="test-key", checkpoint_db_path=":memory:")
 
 
+class FakeJevClient:
+    def classify(self, question, previous, hive_available):
+        import re
+        explicit = extract_explicit_slots(question)
+        dependent = bool(re.search(r"^(那|只看|改成)|呢[？?]?$", question)) or bool((previous or {}).get("pending_clarification"))
+        if dependent and not explicit.get("intent"):
+            intent = (previous or {}).get("intent") or "aggregation"
+        elif "数据质量" in question:
+            intent = "data_quality"
+        else:
+            intent = explicit.get("intent") or "listing_search"
+        if "哪个" in question and ("更高" in question or "更好" in question):
+            intent = "comparison"
+        if "哪个区性价比" in question:
+            intent = "aggregation"
+        if not dependent and not re.search(r"房|租|价|挂牌|趋势|数据质量|区|城市|哪个", question):
+            intent = "unsupported"
+        scope = "import_quality" if intent == "data_quality" else "active_import" if "历史" in question else "current_listing"
+        if intent == "unsupported":
+            scope = "none"
+        return RouteSuggestion(intent=intent, scope=scope,
+            intent_confidence=0.99, scope_confidence=0.99,
+            intent_probability=0.99, scope_probability=0.99,
+            depends_probability=0.99 if dependent else 0.01, multiple_probability=0.01)
+
+
+def make_agent(*args, **kwargs):
+    kwargs.setdefault("jev_client", FakeJevClient())
+    return MysqlNaturalLanguageAgent(*args, **kwargs)
+
+
+class StaticJevClient:
+    def __init__(self, suggestion=None, error=None):
+        self.suggestion = suggestion
+        self.error = error
+        self.calls = []
+
+    def classify(self, question, previous, hive_available):
+        self.calls.append((question, previous, hive_available))
+        if self.error:
+            raise self.error
+        return self.suggestion
+
+
+def suggestion(intent, source, confidence=0.99, depends=False, multiple=False):
+    scope = "none" if source == "none" else "current_listing" if source == "mysql" else "import_quality" if intent == "data_quality" else "active_import"
+    return RouteSuggestion(intent=intent, scope=scope, intent_confidence=confidence,
+        scope_confidence=confidence, intent_probability=confidence,
+        scope_probability=confidence, depends_probability=0.99 if depends else 0.01,
+        multiple_probability=0.99 if multiple else 0.01)
+
+
+def test_jev_low_confidence_gets_one_structured_review():
+    jev = StaticJevClient(suggestion("listing_search", "mysql", confidence=0.4))
+    model = FakeStructuredModel([_rent_plan()], reviews=[RouteReview(
+        intent="aggregation", scope="current_listing", depends_on_previous=False, multiple_tasks=False)])
+    response = make_agent(_settings(), database=FakeDatabase(), model=model,
+        audit_repository=FakeAuditRepository(), jev_client=jev).ask("上海平均租金是多少？")
+    assert response.details.route_reviewed is True
+    assert response.details.route_reason == "low_confidence"
+    assert response.details.data_source == "mysql"
+    assert response.details.allowed_tools == ["lookup_metric_definition", "get_mysql_schema", "query_mysql_readonly"]
+
+
+def test_jev_timeout_reviews_then_clarifies_if_review_fails():
+    jev = StaticJevClient(error=TimeoutError("private-host"))
+    model = FakeStructuredModel([])
+    response = make_agent(_settings(), database=FakeDatabase(), model=model,
+        audit_repository=FakeAuditRepository(), jev_client=jev).ask("上海房价多少？")
+    assert response.sql is None
+    assert response.details.route_reason == "jev_unavailable_review_failed"
+    assert "private-host" not in response.model_dump_json()
+
+
+def test_conflicting_quality_route_cannot_use_mysql():
+    jev = StaticJevClient(suggestion("data_quality", "mysql"))
+    model = FakeStructuredModel([], reviews=[RouteReview(
+        intent="data_quality", scope="current_listing", depends_on_previous=False, multiple_tasks=False)])
+    database = FakeDatabase()
+    response = make_agent(_settings(), database=database, model=model,
+        audit_repository=FakeAuditRepository(), jev_client=jev).ask("数据质量如何？")
+    assert response.sql is None and database.executed_sql is None
+    assert response.details.data_source == "none"
+    assert response.details.route_reason == "hive_required"
+
+
+def test_jev_multiple_tasks_clarifies_without_query():
+    jev = StaticJevClient(suggestion("aggregation", "mysql", multiple=True))
+    database = FakeDatabase()
+    response = make_agent(_settings(), database=database, model=FakeStructuredModel([]),
+        audit_repository=FakeAuditRepository(), jev_client=jev).ask("查上海均价，再列出北京出租房。")
+    assert response.details.route_reason == "multiple_tasks"
+    assert response.details.allowed_tools == []
+    assert response.sql is None and database.executed_sql is None
+
+
 def test_graph_executes_validated_query_and_returns_contract() -> None:
     database = FakeDatabase()
     audit = FakeAuditRepository()
@@ -94,7 +229,7 @@ def test_graph_executes_validated_query_and_returns_contract() -> None:
             )
         ]
     )
-    agent = MysqlNaturalLanguageAgent(
+    agent = make_agent(
         _settings(), database=database, model=model, audit_repository=audit
     )
 
@@ -109,7 +244,7 @@ def test_graph_executes_validated_query_and_returns_contract() -> None:
     assert response.details.selected_tables == ["v_agent_house_listing"]
     assert audit.records[0]["status"] == "SUCCESS"
     assert audit.records[0]["result_rows"] == 1
-    assert "METRIC monthly_rent" in model.message_batches[0][0].content
+    assert "METRIC monthly_rent" in model.message_batches[1][0].content
 
 
 def test_model_usage_is_accumulated_across_sql_and_answer_calls() -> None:
@@ -118,16 +253,16 @@ def test_model_usage_is_accumulated_across_sql_and_answer_calls() -> None:
         usage_metadata={"input_tokens": 10, "output_tokens": 4, "total_tokens": 14},
     )
     audit = FakeAuditRepository()
-    response = MysqlNaturalLanguageAgent(_settings(), database=FakeDatabase(), model=model, audit_repository=audit).ask("上海平均租金是多少？")
-    assert response.details.model_calls == 2
-    assert (response.details.prompt_tokens, response.details.completion_tokens, response.details.total_tokens) == (20, 8, 28)
-    assert audit.records[0]["total_tokens"] == 28
+    response = make_agent(_settings(), database=FakeDatabase(), model=model, audit_repository=audit).ask("上海平均租金是多少？")
+    assert response.details.model_calls == 3
+    assert (response.details.prompt_tokens, response.details.completion_tokens, response.details.total_tokens) == (30, 12, 42)
+    assert audit.records[0]["total_tokens"] == 42
 
 
 def test_missing_usage_is_reported_as_unavailable_without_failure() -> None:
     model = FakeStructuredModel([QueryPlan(needs_clarification=False, sql="SELECT AVG(monthly_rent) AS avg_monthly_rent FROM v_agent_house_listing")])
-    response = MysqlNaturalLanguageAgent(_settings(), database=FakeDatabase(), model=model, audit_repository=FakeAuditRepository()).ask("上海平均租金是多少？")
-    assert response.details.model_calls == 2
+    response = make_agent(_settings(), database=FakeDatabase(), model=model, audit_repository=FakeAuditRepository()).ask("上海平均租金是多少？")
+    assert response.details.model_calls == 3
     assert response.details.total_tokens is None
 
 
@@ -143,7 +278,7 @@ def test_graph_returns_clarification_without_executing_sql() -> None:
             )
         ]
     )
-    agent = MysqlNaturalLanguageAgent(
+    agent = make_agent(
         _settings(), database=database, model=model, audit_repository=audit
     )
 
@@ -168,7 +303,7 @@ def test_graph_repairs_one_unsafe_query_before_execution() -> None:
         ],
         answer="最低月租金为8000元/月。",
     )
-    agent = MysqlNaturalLanguageAgent(
+    agent = make_agent(
         _settings(), database=database, model=model, audit_repository=audit
     )
 
@@ -190,7 +325,7 @@ def test_graph_handles_null_aggregate_as_no_data_without_answer_model() -> None:
             )
         ]
     )
-    agent = MysqlNaturalLanguageAgent(
+    agent = make_agent(
         _settings(), database=database, model=model, audit_repository=audit
     )
 
@@ -210,7 +345,7 @@ def test_prompt_injection_cannot_execute_a_delete_and_is_audited() -> None:
             QueryPlan(needs_clarification=False, sql="DROP TABLE house_info"),
         ]
     )
-    agent = MysqlNaturalLanguageAgent(
+    agent = make_agent(
         _settings(), database=database, model=model, audit_repository=audit
     )
 
@@ -233,7 +368,7 @@ def test_malicious_model_sql_is_still_rejected_after_bounded_retry() -> None:
         QueryPlan(needs_clarification=False, sql="DELETE FROM house_info"),
         QueryPlan(needs_clarification=False, sql="DROP TABLE house_info"),
     ])
-    agent = MysqlNaturalLanguageAgent(
+    agent = make_agent(
         _settings(), database=database, model=model, audit_repository=audit
     )
 
@@ -247,7 +382,7 @@ def test_malicious_model_sql_is_still_rejected_after_bounded_retry() -> None:
 
 
 def test_workflow_has_checkpointed_context_nodes() -> None:
-    agent = MysqlNaturalLanguageAgent(
+    agent = make_agent(
         _settings(),
         database=FakeDatabase(),
         model=FakeStructuredModel([]),
@@ -262,11 +397,8 @@ def test_workflow_has_checkpointed_context_nodes() -> None:
         "structure_question",
         "retrieve_context",
         "build_query_plan",
-        "generate_sql",
-        "validate_sql",
-        "execute_query",
-        "check_result",
-        "retry_query",
+        "call_tool_model",
+        "execute_tool_calls",
         "generate_answer",
         "persist_context",
     )
@@ -288,7 +420,7 @@ def test_trend_query_returns_deterministic_line_chart() -> None:
             ),
         )
     ], answer="上海市挂牌月租金呈上升趋势。")
-    agent = MysqlNaturalLanguageAgent(
+    agent = make_agent(
         _settings(), database=database, model=model, audit_repository=FakeAuditRepository()
     )
 
@@ -316,7 +448,7 @@ def test_query_cannot_escape_the_view_selected_by_the_workflow() -> None:
             sql="SELECT district FROM v_agent_district_summary",
         ),
     ])
-    agent = MysqlNaturalLanguageAgent(
+    agent = make_agent(
         _settings(), database=database, model=model, audit_repository=audit
     )
 
@@ -332,7 +464,7 @@ def test_rag_ambiguity_clarifies_before_calling_the_model() -> None:
     database = FakeDatabase()
     audit = FakeAuditRepository()
     model = FakeStructuredModel([])
-    agent = MysqlNaturalLanguageAgent(
+    agent = make_agent(
         _settings(), database=database, model=model, audit_repository=audit
     )
 
@@ -343,7 +475,7 @@ def test_rag_ambiguity_clarifies_before_calling_the_model() -> None:
     assert "租金/面积" in response.answer
     assert database.schema_load_count == 1
     assert database.executed_sql is None
-    assert model.invoke_count == 0
+    assert model.invoke_count == 1  # validated slot extraction precedes metric retrieval
     assert audit.records[0]["status"] == "CLARIFICATION"
 
 
@@ -363,7 +495,7 @@ def test_bigdata_routes_historical_price_trend_to_hive() -> None:
             ),
         )
     ], answer="上海市历史挂牌单价呈上升趋势。")
-    agent = MysqlNaturalLanguageAgent(
+    agent = make_agent(
         Settings(openai_api_key="test-key", big_data_enabled=True),
         database=mysql_database,
         hive_database=hive_database,
@@ -380,7 +512,7 @@ def test_bigdata_routes_historical_price_trend_to_hive() -> None:
     assert response.details.data_source == "hive"
     assert response.details.selected_tables == ["v_agent_house_info_analysis"]
     assert response.details.retrieved_metrics[0].id == "monthly_trend"
-    assert "Hive SQL" in model.message_batches[0][0].content
+    assert '"data_source": "hive"' in model.message_batches[1][0].content
 
 
 def test_bigdata_routes_historical_rental_trend_to_hive() -> None:
@@ -400,7 +532,7 @@ def test_bigdata_routes_historical_rental_trend_to_hive() -> None:
             ),
         )
     ])
-    agent = MysqlNaturalLanguageAgent(
+    agent = make_agent(
         Settings(openai_api_key="test-key", big_data_enabled=True),
         database=mysql_database,
         hive_database=hive_database,
@@ -426,7 +558,7 @@ def test_bigdata_routes_quality_question_to_active_quality_view() -> None:
             "FROM v_agent_house_data_quality_summary"
         ))
     ])
-    agent = MysqlNaturalLanguageAgent(
+    agent = make_agent(
         Settings(openai_api_key="test-key", big_data_enabled=True),
         database=mysql_database, hive_database=hive_database, model=model,
         audit_repository=FakeAuditRepository(),
@@ -443,7 +575,7 @@ def _sql_prompt_questions(model: FakeStructuredModel) -> list[str]:
     return [
         batch[1].content
         for batch in model.message_batches
-        if "SQL 生成器" in batch[0].content
+        if len(batch) == 2 and "当前允许的 Schema" in batch[0].content
     ]
 
 
@@ -459,7 +591,7 @@ def _rent_plan(extra_where: str = "") -> QueryPlan:
 
 
 def test_missing_thread_id_generates_a_new_thread_id() -> None:
-    agent = MysqlNaturalLanguageAgent(
+    agent = make_agent(
         _settings(),
         database=FakeDatabase(),
         model=FakeStructuredModel([_rent_plan()]),
@@ -478,7 +610,7 @@ def test_followup_replaces_geography_and_inherits_metric() -> None:
         _rent_plan("AND city = '上海市' AND district = '浦东新区'"),
         _rent_plan("AND city = '深圳市' AND district = '南山区'"),
     ])
-    agent = MysqlNaturalLanguageAgent(
+    agent = make_agent(
         _settings(), database=FakeDatabase(), model=model,
         audit_repository=FakeAuditRepository(),
     )
@@ -502,7 +634,7 @@ def test_exact_price_followup_inherits_layout_and_replaces_shanghai_with_shenzhe
             "AND bedroom_count = 3 AND living_room_count = 1"
         ))
     model = FakeStructuredModel([plan("上海市", "浦东新区"), plan("深圳市")])
-    agent = MysqlNaturalLanguageAgent(_settings(), database=FakeDatabase(columns=["avg_unit_price"]), model=model, audit_repository=FakeAuditRepository())
+    agent = make_agent(_settings(), database=FakeDatabase(columns=["avg_unit_price"]), model=model, audit_repository=FakeAuditRepository())
     first = agent.ask("上海浦东三室一厅的平均房价是多少？")
     second = agent.ask("那深圳呢？", first.thread_id)
     resolved = _sql_prompt_questions(model)[1]
@@ -522,7 +654,7 @@ def test_followup_adds_layout_filters() -> None:
             "AND bedroom_count = 2 AND living_room_count = 1"
         ),
     ])
-    agent = MysqlNaturalLanguageAgent(
+    agent = make_agent(
         _settings(), database=FakeDatabase(), model=model,
         audit_repository=FakeAuditRepository(),
     )
@@ -554,7 +686,7 @@ def test_followup_overrides_metric_and_listing_type() -> None:
         ),
     ])
     database = FakeDatabase(rows=[["北京市", 70000.0], ["上海市", 75000.0]], columns=["city", "avg_unit_price"])
-    agent = MysqlNaturalLanguageAgent(
+    agent = make_agent(
         _settings(), database=database, model=model,
         audit_repository=FakeAuditRepository(),
     )
@@ -585,7 +717,7 @@ def test_clarification_followup_recovers_original_cities() -> None:
         ),
     ])
     database = FakeDatabase(rows=[["上海市", 8000.0], ["深圳市", 7500.0]], columns=["city", "avg_monthly_rent"])
-    agent = MysqlNaturalLanguageAgent(
+    agent = make_agent(
         _settings(), database=database, model=model,
         audit_repository=FakeAuditRepository(),
     )
@@ -611,7 +743,7 @@ def test_complete_new_question_does_not_inherit_old_filters() -> None:
             ),
         ),
     ])
-    agent = MysqlNaturalLanguageAgent(
+    agent = make_agent(
         _settings(), database=FakeDatabase(), model=model,
         audit_repository=FakeAuditRepository(),
     )
@@ -627,7 +759,7 @@ def test_complete_new_question_does_not_inherit_old_filters() -> None:
 
 def test_different_threads_are_fully_isolated() -> None:
     model = FakeStructuredModel([_rent_plan("AND city = '上海市'")])
-    agent = MysqlNaturalLanguageAgent(
+    agent = make_agent(
         _settings(), database=FakeDatabase(), model=model,
         audit_repository=FakeAuditRepository(),
     )
@@ -644,7 +776,7 @@ def test_second_turn_prompt_injection_is_rejected_and_turn_state_is_reset() -> N
     database = FakeDatabase()
     audit = FakeAuditRepository()
     model = FakeStructuredModel([_rent_plan("AND city = '上海市'")])
-    agent = MysqlNaturalLanguageAgent(
+    agent = make_agent(
         _settings(), database=database, model=model, audit_repository=audit
     )
     agent.ask("查询上海租金。", "safe-thread")
@@ -669,7 +801,7 @@ def test_conversation_history_is_trimmed_and_contains_no_rows() -> None:
         conversation_history_max_messages=4,
         conversation_history_max_chars=1200,
     )
-    agent = MysqlNaturalLanguageAgent(
+    agent = make_agent(
         settings, database=FakeDatabase(), model=FakeStructuredModel([]),
         audit_repository=FakeAuditRepository(),
     )
@@ -683,7 +815,7 @@ def test_conversation_history_is_trimmed_and_contains_no_rows() -> None:
 
 
 def test_database_rows_are_not_persisted_in_checkpoint() -> None:
-    agent = MysqlNaturalLanguageAgent(
+    agent = make_agent(
         _settings(), database=FakeDatabase(rows=[[8500.0]]),
         model=FakeStructuredModel([_rent_plan()]),
         audit_repository=FakeAuditRepository(),
@@ -699,14 +831,14 @@ def test_sqlite_checkpoint_survives_agent_recreation(tmp_path) -> None:
     checkpoint = tmp_path / "checkpoints" / "agent.sqlite"
     settings = Settings(openai_api_key="test-key", checkpoint_db_path=str(checkpoint))
     first_model = FakeStructuredModel([_rent_plan("AND city = '上海市'")])
-    first_agent = MysqlNaturalLanguageAgent(
+    first_agent = make_agent(
         settings, database=FakeDatabase(), model=first_model,
         audit_repository=FakeAuditRepository(),
     )
     first_agent.ask("上海出租房平均月租金是多少？", "persistent-thread")
 
     second_model = FakeStructuredModel([_rent_plan("AND city = '深圳市' AND district = '南山区'")])
-    second_agent = MysqlNaturalLanguageAgent(
+    second_agent = make_agent(
         settings, database=FakeDatabase(), model=second_model,
         audit_repository=FakeAuditRepository(),
     )
@@ -719,7 +851,7 @@ def test_sqlite_checkpoint_survives_agent_recreation(tmp_path) -> None:
 
 def test_missing_checkpoint_directory_is_created(tmp_path) -> None:
     checkpoint = tmp_path / "missing" / "nested" / "agent.sqlite"
-    MysqlNaturalLanguageAgent(
+    make_agent(
         Settings(openai_api_key="test-key", checkpoint_db_path=str(checkpoint)),
         database=FakeDatabase(), model=FakeStructuredModel([]),
         audit_repository=FakeAuditRepository(),
@@ -733,7 +865,7 @@ def test_corrupt_checkpoint_returns_understandable_error(tmp_path) -> None:
     checkpoint.write_bytes(b"this is not a sqlite database")
 
     with pytest.raises(AgentCheckpointError, match="会话存储不可用"):
-        MysqlNaturalLanguageAgent(
+        make_agent(
             Settings(openai_api_key="test-key", checkpoint_db_path=str(checkpoint)),
             database=FakeDatabase(), model=FakeStructuredModel([]),
             audit_repository=FakeAuditRepository(),

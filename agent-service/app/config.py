@@ -25,6 +25,11 @@ class Settings:
     openai_api_key: str | None = os.getenv("OPENAI_API_KEY") or None
     openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
     openai_base_url: str | None = os.getenv("OPENAI_BASE_URL") or None
+    typesafe_api_key: str | None = os.getenv("TYPESAFE_API_KEY") or None
+    jev_model: str = os.getenv("JEV_MODEL", "jev-latest")
+    jev_timeout_seconds: float = float(os.getenv("JEV_TIMEOUT_SECONDS", "5"))
+    jev_confidence_threshold: float = float(os.getenv("JEV_CONFIDENCE_THRESHOLD", "0.7"))
+    jev_noul_margin: float = float(os.getenv("JEV_NOUL_MARGIN", "0.15"))
     mysql_host: str = os.getenv("MYSQL_HOST", "127.0.0.1")
     mysql_port: int = int(os.getenv("MYSQL_PORT", "3306"))
     mysql_database: str = os.getenv("MYSQL_DATABASE", "house_price")
@@ -39,6 +44,10 @@ class Settings:
     sql_max_repair_attempts: int = min(
         2, max(0, int(os.getenv("SQL_MAX_REPAIR_ATTEMPTS", "1")))
     )
+    tool_max_model_calls: int = int(os.getenv("TOOL_MAX_MODEL_CALLS", "6"))
+    model_max_calls_per_turn: int = int(os.getenv("MODEL_MAX_CALLS_PER_TURN", "8"))
+    tool_max_calls: int = int(os.getenv("TOOL_MAX_CALLS", "8"))
+    tool_max_successful_queries: int = 1
     checkpoint_db_path: str = os.getenv(
         "CHECKPOINT_DB_PATH", "data/checkpoints/agent_checkpoints.sqlite"
     )

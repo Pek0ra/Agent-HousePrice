@@ -10,10 +10,13 @@ Intent = Literal[
     "ranking",
     "comparison",
     "trend",
+    "data_quality",
+    "clarify",
     "unsafe_request",
     "unsupported",
 ]
 DataSource = Literal["mysql", "hive", "none"]
+RequestedScope = Literal["current_listing", "active_import", "import_quality", "none"]
 
 
 class ValidationResult(TypedDict):
@@ -42,6 +45,7 @@ class AgentWorkflowState(TypedDict, total=False):
     resolved_question: str
     trace_id: str
     data_source: DataSource
+    requested_scope: RequestedScope
     intent: Intent
     selected_tables: list[str]
     retrieved_context: str
@@ -62,3 +66,14 @@ class AgentWorkflowState(TypedDict, total=False):
     context_resolution: dict[str, Any]
     context_resolution_duration_ms: int
     model_usage: dict[str, Any]
+    route_suggestion: dict[str, Any]
+    route_reason: str
+    route_reviewed: bool
+    route_duration_ms: int
+    allowed_tools: list[str]
+    tool_transcript: Annotated[list[Any] | None, UntrackedValue]
+    pending_tool_calls: Annotated[list[dict[str, Any]] | None, UntrackedValue]
+    proposed_answer: Annotated[str | None, UntrackedValue]
+    tool_model_calls: int
+    tool_call_count: int
+    successful_queries: int

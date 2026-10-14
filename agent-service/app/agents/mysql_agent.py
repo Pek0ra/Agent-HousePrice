@@ -11,30 +11,30 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
 
 from app.agents.conversation import (
-    extract_explicit_slots,
-    normalize_question,
     resolve_conversation_context,
     trim_messages,
+    validate_question_slots,
 )
+from app.agents.jev_router import JevRoutingClient, RouteSuggestion, INTENT_CRITERIA, SCOPE_CRITERIA
+from app.agents.routing_policy import decide_route, review_reason
+from app.agents.route_review import route_review_messages
 from app.agents.prompts import (
-    ANSWER_SYSTEM_PROMPT,
-    SQL_GENERATION_SYSTEM_PROMPT,
-    SQL_REPAIR_SYSTEM_PROMPT,
+    TOOL_CALLING_SYSTEM_PROMPT,
 )
-from app.agents.workflow_state import AgentWorkflowState, Intent
+from app.agents.workflow_state import AgentWorkflowState
 from app.config import Settings
 from app.database.audit import MysqlAuditRepository
 from app.database.mysql import MysqlQueryDatabase
 from app.rag.retriever import MarkdownBusinessKnowledgeRetriever
-from app.schemas.chat import AnswerDraft, ChatResponse, ExecutionDetails, QueryPlan
-from app.security.sql_validator import SqlValidator
+from app.schemas.chat import ChatResponse, ExecutionDetails, QuestionSlots, RouteReview
+from app.tools import build_tool_registry
 
 logger = logging.getLogger(__name__)
 
@@ -43,11 +43,6 @@ UNSAFE_PATTERN = re.compile(
     r"\b(delete|drop|truncate|alter|insert|update|create|grant|revoke)\b)",
     re.IGNORECASE,
 )
-HOUSING_PATTERN = re.compile(
-    r"(房|租金|房价|挂牌|小区|行政区|均价|单价|总价|趋势|成交|性价比|划算|"
-    r"数据质量|质量分|导入任务|数仓|hive)"
-)
-
 THREAD_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 
@@ -83,12 +78,22 @@ class MysqlNaturalLanguageAgent:
         knowledge_retriever: MarkdownBusinessKnowledgeRetriever | None = None,
         hive_database: Any | None = None,
         checkpointer: Any | None = None,
+        jev_client: JevRoutingClient | None = None,
     ) -> None:
+        if not 0 <= settings.jev_confidence_threshold <= 1 or not 0 <= settings.jev_noul_margin < 0.5:
+            raise ValueError("Invalid Jev routing thresholds")
+        if settings.jev_timeout_seconds <= 0:
+            raise ValueError("Jev timeout must be positive")
+        if (settings.tool_max_model_calls < 1 or settings.model_max_calls_per_turn < 1
+                or settings.tool_max_calls < 1 or settings.tool_max_successful_queries != 1):
+            raise ValueError("Invalid tool loop limits")
         self._settings = settings
         self._database = database or MysqlQueryDatabase(settings)
         self._model = model
         self._audit_repository = audit_repository or MysqlAuditRepository(settings)
         self._knowledge_retriever = knowledge_retriever or MarkdownBusinessKnowledgeRetriever()
+        self._jev_client = jev_client or (JevRoutingClient(settings.typesafe_api_key, model=settings.jev_model,
+            timeout_seconds=settings.jev_timeout_seconds) if settings.typesafe_api_key else None)
         if hive_database is not None:
             self._hive_database = hive_database
         elif settings.big_data_enabled:
@@ -168,6 +173,8 @@ class MysqlNaturalLanguageAgent:
         return None
 
     def _invoke_structured(self, state: AgentWorkflowState, schema: Any, messages: list[Any]) -> tuple[Any, dict[str, Any]]:
+        if state.get("model_usage", {}).get("model_calls", 0) >= self._settings.model_max_calls_per_turn:
+            raise AgentQueryError("本轮模型调用已达上限。")
         output = self._get_model().with_structured_output(schema, method="json_schema", include_raw=True).invoke(messages)
         parsed = output.get("parsed") if isinstance(output, dict) and "parsed" in output else output
         raw = output.get("raw") if isinstance(output, dict) else None
@@ -198,6 +205,7 @@ class MysqlNaturalLanguageAgent:
             "resolved_question": current_question,
             "raw_unsafe_detected": bool(UNSAFE_PATTERN.search(current_question)),
             "data_source": "none",
+            "requested_scope": "none",
             "intent": "unsupported",
             "selected_tables": [],
             "retrieved_context": "",
@@ -221,101 +229,150 @@ class MysqlNaturalLanguageAgent:
             "context_resolution": {},
             "context_resolution_duration_ms": 0,
             "model_usage": {"model_calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            "route_suggestion": {}, "route_reason": "", "route_reviewed": False,
+            "route_duration_ms": 0, "allowed_tools": [],
+            "tool_transcript": None, "pending_tool_calls": None,
+            "proposed_answer": None, "tool_model_calls": 0,
+            "tool_call_count": 0, "successful_queries": 0,
         }
 
     # 2. Resolve references against structured, bounded thread context.
     def _resolve_context(self, state: AgentWorkflowState) -> AgentWorkflowState:
-        started = time.perf_counter()
-        resolution, context = resolve_conversation_context(
-            state["current_question"],
-            state.get("conversation_context"),
-            unsafe=state.get("raw_unsafe_detected", False),
-        )
-        return {
-            "resolved_question": resolution.standalone_question,
-            "conversation_context": context,
-            "context_resolution": resolution.model_dump(),
-            "context_resolution_duration_ms": int((time.perf_counter() - started) * 1000),
-            "needs_clarification": resolution.unresolved_reference,
-            "clarification_question": resolution.clarification_question,
-        }
+        # History is applied after Jev's dependency judgment and validated slot extraction.
+        return {"resolved_question": state["current_question"]}
 
-    # 3. Intent recognition: deterministic routing, not an authorization layer.
+    # 3. Jev proposes a bounded route; a single structured model review handles uncertainty.
     def _recognize_intent(self, state: AgentWorkflowState) -> AgentWorkflowState:
-        question = state["resolved_question"].strip()
-        if state.get("raw_unsafe_detected") or UNSAFE_PATTERN.search(question):
-            intent: Intent = "unsafe_request"
-        elif not HOUSING_PATTERN.search(question) and not (
-            extract_explicit_slots(question).get("cities")
-            and extract_explicit_slots(question).get("intent") == "comparison"
-        ):
-            intent = "unsupported"
-        elif re.search(r"(趋势|走势|月度|每月|按月|变化)", question):
-            intent = "trend"
-        elif re.search(r"(对比|比较|相比|之间|哪个.{0,4}(更高|更低|更贵|便宜|好))", question):
-            intent = "comparison"
-        elif re.search(r"(排名|排行|top\s*\d*|前[\d一二三四五六七八九十]+|最高的[\d一二三四五])", question, re.I):
-            intent = "ranking"
-        elif re.search(r"(平均|均价|最高|最低|最大|最小|多少|数量|房价|租金|性价比|划算)", question):
-            intent = "aggregation"
-        else:
-            intent = "listing_search"
-        return {"intent": intent}
+        if state.get("raw_unsafe_detected"):
+            return {"intent": "unsafe_request", "requested_scope": "none", "data_source": "none", "route_reason": "unsafe_request"}
+        started = time.perf_counter()
+        suggestion: RouteSuggestion | None = None
+        reason = "jev_unconfigured"
+        hive_available = bool(self._settings.big_data_enabled and self._hive_database is not None)
+        if self._jev_client is not None:
+            try:
+                suggestion = self._jev_client.classify(state["current_question"], state.get("conversation_context"), hive_available)
+                reason = review_reason(suggestion, threshold=self._settings.jev_confidence_threshold,
+                                       noul_margin=self._settings.jev_noul_margin) or "accepted"
+            except Exception:
+                reason = "jev_unavailable"
+        proposed = suggestion.model_dump() if suggestion else {}
+        if reason != "accepted":
+            try:
+                reviewed, usage = self._invoke_structured(state, RouteReview,
+                    route_review_messages(state["current_question"], state.get("conversation_context"),
+                                          proposed, reason, hive_available))
+                if reviewed.intent not in INTENT_CRITERIA or reviewed.scope not in SCOPE_CRITERIA:
+                    raise ValueError("Invalid route review")
+                return {"intent": reviewed.intent, "requested_scope": reviewed.scope, "data_source": "none",
+                        "route_suggestion": {**proposed, "depends_on_previous": reviewed.depends_on_previous,
+                                             "multiple_tasks": reviewed.multiple_tasks},
+                        "route_reason": reason, "route_reviewed": True, "model_usage": usage,
+                        "route_duration_ms": int((time.perf_counter() - started) * 1000)}
+            except Exception:
+                return {"intent": "clarify", "requested_scope": "none", "data_source": "none", "needs_clarification": True,
+                        "clarification_question": "请明确要查询的房源指标和范围。", "route_suggestion": proposed,
+                        "route_reason": f"{reason}_review_failed", "route_reviewed": True,
+                        "route_duration_ms": int((time.perf_counter() - started) * 1000)}
+        return {"intent": suggestion.intent, "requested_scope": suggestion.scope, "data_source": "none",
+                "route_suggestion": {**proposed, "depends_on_previous": suggestion.depends_probability >= 0.5,
+                                     "multiple_tasks": suggestion.multiple_probability >= 0.5},
+                "route_reason": "accepted", "route_duration_ms": int((time.perf_counter() - started) * 1000)}
 
-    # 4. Deterministic data-source selection keeps routing outside the model.
+    # 4. Capability policy, never a regex or a model authorization decision.
     def _select_data_source(self, state: AgentWorkflowState) -> AgentWorkflowState:
-        if state["intent"] in {"unsafe_request", "unsupported"}:
+        if state["intent"] == "unsafe_request" or state.get("needs_clarification"):
             return {"data_source": "none", "selected_tables": []}
-        question = state["resolved_question"]
-        hive_query = state["intent"] == "trend" or bool(
-            re.search(r"(历史|离线|批量|全量|数仓|hive|数据质量|质量分)", question, re.I)
-        )
-        if self._settings.big_data_enabled and self._hive_database is not None and hive_query:
-            return {"data_source": "hive"}
-        return {"data_source": "mysql"}
+        route = state.get("route_suggestion", {})
+        decision = decide_route(state["intent"], state["requested_scope"],
+            hive_available=bool(self._settings.big_data_enabled and self._hive_database is not None),
+            multiple_tasks=bool(route.get("multiple_tasks")),
+            has_history=bool(state.get("conversation_context", {}).get("previous_question")),
+            depends_on_previous=bool(route.get("depends_on_previous")),
+            explicit_import=bool(route.get("explicit_import")))
+        tables = list(decision.tables)
+        if decision.source == "mysql" and decision.intent in {"ranking", "comparison"} and state.get("structured_question", {}).get("bedroom_count") is not None:
+            tables = ["v_agent_house_listing"]
+        allowed_tools = []
+        if decision.source in {"mysql", "hive"} and tables:
+            allowed_tools = list(build_tool_registry(
+                settings=self._settings, selected_tables=set(tables), source=decision.source,
+                mysql_database=self._database, hive_database=self._hive_database,
+                retriever=self._knowledge_retriever,
+            ).names)
+        return {"intent": decision.intent, "data_source": decision.source,
+                "selected_tables": tables, "needs_clarification": decision.needs_clarification,
+                "clarification_question": decision.clarification_question,
+                "allowed_tools": allowed_tools,
+                "route_reason": decision.reason if decision.reason != "accepted" else state.get("route_reason", "accepted")}
 
     # 5. Materialize inherited slots before prompting the model.
-    @staticmethod
-    def _structure_question(state: AgentWorkflowState) -> AgentWorkflowState:
-        question = state["resolved_question"]
-        context = state.get("conversation_context", {})
-        explicit = extract_explicit_slots(question)
-        structured: dict[str, Any] = {
-            "normalized_question": normalize_question(question),
-            "cities": context.get("cities", explicit.get("cities", [])),
-            "districts": context.get("districts", explicit.get("districts", [])),
-            "metric": context.get("metric") or explicit.get("metric") or "listing",
-            "listing_type": context.get("listing_type") or explicit.get("listing_type"),
-        }
-        for field in (
-            "bedroom_count",
-            "living_room_count",
-            "start_month",
-            "end_month",
-            "ranking_limit",
-        ):
-            value = context.get(field, explicit.get(field))
-            if value is not None:
-                structured[field] = value
-        return {"structured_question": structured}
+    def _structure_question(self, state: AgentWorkflowState) -> AgentWorkflowState:
+        if state["intent"] in {"unsafe_request", "unsupported", "clarify"} or state.get("needs_clarification"):
+            return {"structured_question": {}}
+        try:
+            slots, usage = self._invoke_structured(state, QuestionSlots, [
+                SystemMessage("只提取当前问题明确给出的城市、区县、挂牌类型、指标、户型、月份和排名数量，输出 QuestionSlots。"
+                              "不得推断缺失值。metric 只能为 listing、listing_count、unit_price、total_price、monthly_rent。"
+                              "月份格式 YYYY-MM。取消条件时设置 clear_* 标志。不得决定意图、数据源或 SQL。"),
+                HumanMessage(state["current_question"]),
+            ])
+            explicit = validate_question_slots(slots)
+            started = time.perf_counter()
+            route = state.get("route_suggestion", {})
+            resolution, context = resolve_conversation_context(
+                state["current_question"], state.get("conversation_context"),
+                explicit_slots=explicit, depends_on_history=bool(route.get("depends_on_previous")),
+            )
+            if slots.clear_districts:
+                context["districts"] = []
+            if slots.clear_layout:
+                context["bedroom_count"] = context["living_room_count"] = None
+            if slots.clear_months:
+                context["start_month"] = context["end_month"] = None
+            context["intent"] = state["intent"]
+            structured = {**context, "normalized_question": resolution.standalone_question,
+                          "metric": context.get("metric") or "listing"}
+            return {"resolved_question": resolution.standalone_question,
+                    "conversation_context": context, "context_resolution": resolution.model_dump(),
+                    "context_resolution_duration_ms": int((time.perf_counter() - started) * 1000),
+                    "structured_question": structured, "model_usage": usage,
+                    "needs_clarification": resolution.unresolved_reference,
+                    "clarification_question": resolution.clarification_question}
+        except Exception:
+            return {"needs_clarification": True, "clarification_question": "请明确城市、指标和筛选条件。",
+                    "route_reason": "invalid_question_slots"}
 
     # 6. Retrieve safe schema and relevant business semantics from Markdown RAG.
     def _retrieve_context(self, state: AgentWorkflowState) -> AgentWorkflowState:
-        database = self._hive_database if state["data_source"] == "hive" else self._database
-        if database is None:
-            raise RuntimeError("已选择 Hive，但 Hive 查询工具未配置")
-        schema = database.describe_allowed_schema()
-        retrieval = self._knowledge_retriever.retrieve(state["resolved_question"])
+        tools = build_tool_registry(settings=self._settings, selected_tables=set(state["selected_tables"]),
+            source=state["data_source"], mysql_database=self._database,
+            hive_database=self._hive_database, retriever=self._knowledge_retriever)
+        schema_result = tools.invoke(f"get_{state['data_source']}_schema", {})
+        metric_result = tools.invoke("lookup_metric_definition", {"question": state["resolved_question"]})
+        if not schema_result.ok or not metric_result.ok:
+            raise AgentQueryError("查询上下文暂时不可用，请稍后重试。")
+        schema = schema_result.data
+        retrieval = metric_result.data
+        rendered_schema = "\n\n".join(
+            f"TABLE {view.name}\nDESCRIPTION: {view.description}\nCOLUMNS: " +
+            ", ".join(f"{column.name} {column.type}" for column in view.columns)
+            for view in schema.views
+        )
+        metric_context = "\n\n".join(
+            f"METRIC {definition.id} ({definition.title})\n{definition.description}"
+            for definition in retrieval.definitions
+        ) or "未检索到额外业务指标定义；不得自行创造指标口径。"
         return {
-            "retrieved_context": f"{schema}\n\n检索到的业务口径：\n{retrieval.context}",
-            "retrieved_document_ids": retrieval.document_ids,
+            "retrieved_context": f"{rendered_schema}\n\n检索到的业务口径：\n{metric_context}",
+            "retrieved_document_ids": [definition.id for definition in retrieval.definitions],
             "retrieved_metrics": [
                 {
-                    "id": document.document_id,
-                    "title": document.title,
-                    "description": document.content,
+                    "id": definition.id,
+                    "title": definition.title,
+                    "description": definition.description,
                 }
-                for document in retrieval.documents
+                for definition in retrieval.definitions
             ],
             "needs_clarification": state.get("needs_clarification", False)
             or retrieval.needs_clarification,
@@ -328,115 +385,132 @@ class MysqlNaturalLanguageAgent:
     def _build_query_plan(state: AgentWorkflowState) -> AgentWorkflowState:
         intent = state["intent"]
         structured = state["structured_question"]
-        if state["data_source"] == "hive":
-            if re.search(r"(数据质量|质量分|缺失|非法|重复)", state["resolved_question"]):
-                tables = ["v_agent_house_data_quality_summary"]
-            else:
-                tables = ["v_agent_house_info_analysis"]
-        elif intent == "trend":
-            tables = ["v_agent_monthly_price_trend"]
-        elif intent in {"ranking", "comparison"} and "bedroom_count" not in structured:
-            tables = ["v_agent_district_summary"]
-        else:
-            tables = ["v_agent_house_listing"]
+        tables = state["selected_tables"]
         plan = {
             "intent": intent,
             "data_source": state["data_source"],
             "selected_tables": tables,
             "question": structured,
             "constraints": ["read_only", "whitelist_only", "limit_100"],
+            "allowed_tools": state.get("allowed_tools", []),
         }
         return {"selected_tables": tables, "query_plan": plan}
 
-    # 8. Generate SQL from the explicit upstream plan.
-    def _generate_sql(self, state: AgentWorkflowState) -> AgentWorkflowState:
-        plan, usage = self._invoke_structured(state, QueryPlan, [
-            SystemMessage(SQL_GENERATION_SYSTEM_PROMPT.format(
-                dialect_name="Hive" if state["data_source"] == "hive" else "MySQL",
+    def _turn_tools(self, state: AgentWorkflowState):
+        return build_tool_registry(
+            settings=self._settings, selected_tables=set(state["selected_tables"]),
+            source=state["data_source"], mysql_database=self._database,
+            hive_database=self._hive_database, retriever=self._knowledge_retriever,
+        )
+
+    def _call_tool_model(self, state: AgentWorkflowState) -> AgentWorkflowState:
+        if (state.get("tool_model_calls", 0) >= self._settings.tool_max_model_calls
+                or state.get("model_usage", {}).get("model_calls", 0) >= self._settings.model_max_calls_per_turn):
+            return {"error": "模型工具调用已达上限。"}
+        registry = self._turn_tools(state)
+        transcript = state.get("tool_transcript") or [
+            SystemMessage(TOOL_CALLING_SYSTEM_PROMPT.format(
                 query_plan=json.dumps(state["query_plan"], ensure_ascii=False),
                 context=state["retrieved_context"],
             )),
             HumanMessage(state["structured_question"]["normalized_question"]),
-        ])
-        return {
-            "generated_sql": plan.sql or "",
-            "needs_clarification": plan.needs_clarification,
-            "clarification_question": plan.clarification_question,
-            "validation_result": {"valid": False, "normalized_sql": None, "error": None},
-            "error": "",
-            "model_usage": usage,
-        }
-
-    # 9. Validate SQL with SQLGlot.
-    def _validate_sql(self, state: AgentWorkflowState) -> AgentWorkflowState:
-        candidate = state.get("generated_sql", "")
-        if not candidate:
-            error = "模型没有生成 SQL"
-            return {"validation_result": {"valid": False, "normalized_sql": None, "error": error}, "error": error}
+        ]
+        model = self._get_model()
+        if not hasattr(model, "bind_tools"):
+            raise AgentNotConfiguredError("当前生成式模型不支持工具调用。")
         try:
-            plan_validator = SqlValidator(
-                set(state["selected_tables"]),
-                max_rows=self._settings.sql_max_rows,
-                dialect="hive" if state["data_source"] == "hive" else "mysql",
-            )
-            normalized = plan_validator.validate_and_normalize(candidate)
-            return {
-                "generated_sql": normalized,
-                "validation_result": {"valid": True, "normalized_sql": normalized, "error": None},
-                "error": "",
-            }
-        except ValueError as exc:
-            error = str(exc)
-            return {"validation_result": {"valid": False, "normalized_sql": None, "error": error}, "error": error}
-
-    # 10. Execute the read-only query.
-    def _execute_query(self, state: AgentWorkflowState) -> AgentWorkflowState:
-        try:
-            database = self._hive_database if state["data_source"] == "hive" else self._database
-            if database is None:
-                raise RuntimeError("Hive 查询工具未配置")
-            columns, rows = database.execute_read_only(state["generated_sql"])
-            normalized_rows = [[_json_value(value) for value in row] for row in rows]
-            return {
-                "query_result": {"columns": columns, "rows": normalized_rows, "row_count": len(normalized_rows), "is_empty": False},
-                "error": "",
-            }
+            bound = model.bind_tools(registry.as_langchain_tools())
+            reply = bound.invoke(transcript)
         except Exception as exc:
-            return {"error": f"数据库执行失败：{exc}"}
-
-    # 11. Inspect the result before answer generation.
-    @staticmethod
-    def _check_result(state: AgentWorkflowState) -> AgentWorkflowState:
-        result = state["query_result"]
-        rows = result["rows"]
-        is_empty = not rows or all(all(value is None for value in row) for row in rows)
-        return {"query_result": {**result, "is_empty": is_empty}}
-
-    # 12. Repair SQL with a bounded retry count.
-    def _retry_query(self, state: AgentWorkflowState) -> AgentWorkflowState:
-        repair_request = {
-            "question": state["resolved_question"],
-            "query_plan": state["query_plan"],
-            "previous_sql": state.get("generated_sql"),
-            "error": state["error"],
-        }
-        repaired, usage = self._invoke_structured(state, QueryPlan, [
-            SystemMessage(SQL_REPAIR_SYSTEM_PROMPT.format(
-                dialect_name="Hive" if state["data_source"] == "hive" else "MySQL",
-                context=state["retrieved_context"],
-            )),
-            HumanMessage(json.dumps(repair_request, ensure_ascii=False)),
-        ])
+            raise AgentNotConfiguredError("当前模型服务的工具调用不可用，请检查 bind_tools 兼容性。") from exc
+        if not isinstance(reply, AIMessage) or getattr(reply, "invalid_tool_calls", None):
+            raise AgentNotConfiguredError("模型服务未返回可解析的工具调用结果。")
+        if not reply.tool_calls and state.get("query_result") is None:
+            content = reply.content.strip() if isinstance(reply.content, str) else ""
+            if not (len(content) <= 200 and (content.endswith(("？", "?")) or content.startswith(("请明确", "请补充")))):
+                raise AgentNotConfiguredError("模型未发出查询工具调用，无法确认 function calling 兼容性。")
+        usage = self._usage_after_message(state, reply)
         return {
-            "generated_sql": repaired.sql or "",
-            "needs_clarification": repaired.needs_clarification,
-            "clarification_question": repaired.clarification_question,
-            "retry_count": state.get("retry_count", 0) + 1,
-            "error": "",
+            "tool_transcript": [*transcript, reply],
+            "pending_tool_calls": list(reply.tool_calls),
+            "proposed_answer": reply.content if isinstance(reply.content, str) else "",
+            "tool_model_calls": state.get("tool_model_calls", 0) + 1,
             "model_usage": usage,
+            "error": "",
         }
 
-    # 13. Generate a grounded answer and deterministic chart configuration.
+    def _usage_after_message(self, state: AgentWorkflowState, reply: AIMessage) -> dict[str, Any]:
+        previous = state.get("model_usage", {"model_calls": 0, "prompt_tokens": 0,
+                                              "completion_tokens": 0, "total_tokens": 0})
+        usage = {**previous, "model_calls": int(previous.get("model_calls", 0)) + 1}
+        tokens = self._usage_from_raw(reply)
+        if tokens is None or previous.get("prompt_tokens") is None:
+            usage.update(prompt_tokens=None, completion_tokens=None, total_tokens=None)
+        else:
+            usage.update(prompt_tokens=int(previous["prompt_tokens"]) + tokens[0],
+                         completion_tokens=int(previous["completion_tokens"]) + tokens[1],
+                         total_tokens=int(previous["total_tokens"]) + tokens[2])
+        return usage
+
+    def _execute_tool_calls(self, state: AgentWorkflowState) -> AgentWorkflowState:
+        registry = self._turn_tools(state)
+        transcript = list(state.get("tool_transcript") or [])
+        count = state.get("tool_call_count", 0)
+        repairs = state.get("retry_count", 0)
+        successful = state.get("successful_queries", 0)
+        query_result = state.get("query_result")
+        generated_sql = state.get("generated_sql", "")
+        error = ""
+        for call in state.get("pending_tool_calls") or []:
+            if count >= self._settings.tool_max_calls:
+                error = "工具调用次数已达上限。"
+                break
+            name, args, call_id = call.get("name"), call.get("args"), call.get("id")
+            if not isinstance(name, str) or not isinstance(args, dict) or not isinstance(call_id, str) or not call_id:
+                error = "模型返回的工具调用格式无效。"
+                break
+            count += 1
+            is_query = name in {"query_mysql_readonly", "query_hive_readonly"}
+            if is_query and isinstance(args.get("sql"), str):
+                generated_sql = args["sql"][:20000]
+            if is_query and successful >= self._settings.tool_max_successful_queries:
+                from app.tools.contracts import ToolError, ToolResult
+                result = ToolResult(ok=False, error=ToolError(code="unavailable", message="本轮查询已完成，不可再次查询。"))
+            else:
+                result = registry.invoke(name, args)
+            transcript.append(ToolMessage(content=result.model_dump_json(), tool_call_id=call_id, name=name))
+            if is_query and result.ok:
+                data = result.data
+                rows = [[_json_value(value) for value in row] for row in data.rows]
+                query_result = {"columns": data.columns, "rows": rows,
+                                "row_count": len(rows), "is_empty": data.is_empty}
+                generated_sql = data.sql
+                successful += 1
+            elif is_query and not result.ok and successful == 0:
+                if repairs >= self._settings.sql_max_repair_attempts:
+                    error = result.error.message
+                    break
+                repairs += 1
+        return {"tool_transcript": transcript, "pending_tool_calls": None,
+                "tool_call_count": count, "retry_count": repairs,
+                "successful_queries": successful, "query_result": query_result,
+                "generated_sql": generated_sql, "error": error}
+
+    @staticmethod
+    def _route_after_tool_model(state: AgentWorkflowState) -> str:
+        if state.get("error"):
+            return "failed"
+        if state.get("pending_tool_calls"):
+            return "execute"
+        if state.get("query_result") is not None:
+            return "answer"
+        return "clarify"
+
+    @staticmethod
+    def _route_after_tool_execution(state: AgentWorkflowState) -> str:
+        return "failed" if state.get("error") else "continue"
+
+    # Ground final text in the successful tool result.
     def _generate_answer(self, state: AgentWorkflowState) -> AgentWorkflowState:
         if state["intent"] == "unsafe_request":
             return {"final_answer": "该请求包含写入或绕过安全规则的意图。我只能帮你查询房源和统计数据。", "chart_config": None}
@@ -445,21 +519,25 @@ class MysqlNaturalLanguageAgent:
         if state.get("needs_clarification"):
             return {"final_answer": state.get("clarification_question") or "请补充查询条件。", "chart_config": None}
 
-        result = state["query_result"]
+        result = state.get("query_result")
+        if result is None:
+            proposed = (state.get("proposed_answer") or "").strip()
+            question = proposed if len(proposed) <= 200 and (proposed.endswith(("？", "?")) or proposed.startswith(("请明确", "请补充"))) else "请明确查询指标和范围。"
+            return {"needs_clarification": True,
+                    "clarification_question": question,
+                    "final_answer": question, "chart_config": None}
         if result["is_empty"]:
             return {"final_answer": "当前数据中未找到符合条件的房源。", "chart_config": None}
-
-        payload = {"question": state["resolved_question"], "sql": state["generated_sql"], "columns": result["columns"], "rows": result["rows"]}
-        draft, usage = self._invoke_structured(state, AnswerDraft, [
-            SystemMessage(ANSWER_SYSTEM_PROMPT),
-            HumanMessage(json.dumps(payload, ensure_ascii=False, default=str)),
-        ])
-        return {"final_answer": draft.answer, "chart_config": self._build_chart_config(state), "model_usage": usage}
+        answer = (state.get("proposed_answer") or "").strip()
+        if not answer:
+            return {"needs_clarification": True, "clarification_question": "请重新描述查询需求。",
+                    "final_answer": "请重新描述查询需求。", "chart_config": None}
+        return {"final_answer": answer, "chart_config": self._build_chart_config(state)}
 
     # 14. Persist only compact messages and structured slots, never rows in history.
     def _persist_context(self, state: AgentWorkflowState) -> AgentWorkflowState:
         context = dict(state.get("conversation_context", {}))
-        if state["intent"] not in {"unsafe_request", "unsupported"}:
+        if state["intent"] not in {"unsafe_request", "unsupported"} and state.get("route_reason") != "missing_history":
             context.update(
                 pending_clarification=(
                     state.get("clarification_question")
@@ -527,20 +605,6 @@ class MysqlNaturalLanguageAgent:
     def _route_after_retrieval(state: AgentWorkflowState) -> str:
         return "clarify" if state.get("needs_clarification") else "continue"
 
-    @staticmethod
-    def _route_after_generation(state: AgentWorkflowState) -> str:
-        return "clarify" if state.get("needs_clarification") else "validate"
-
-    def _route_after_validation(self, state: AgentWorkflowState) -> str:
-        if state["validation_result"]["valid"]:
-            return "execute"
-        return "retry" if state.get("retry_count", 0) < self._settings.sql_max_repair_attempts else "failed"
-
-    def _route_after_execution(self, state: AgentWorkflowState) -> str:
-        if not state.get("error"):
-            return "check"
-        return "retry" if state.get("retry_count", 0) < self._settings.sql_max_repair_attempts else "failed"
-
     def _build_graph(self):
         graph = StateGraph(AgentWorkflowState)
         graph.add_node("prepare_turn", self._prepare_turn)
@@ -550,35 +614,28 @@ class MysqlNaturalLanguageAgent:
         graph.add_node("structure_question", self._structure_question)
         graph.add_node("retrieve_context", self._retrieve_context)
         graph.add_node("build_query_plan", self._build_query_plan)
-        graph.add_node("generate_sql", self._generate_sql)
-        graph.add_node("validate_sql", self._validate_sql)
-        graph.add_node("execute_query", self._execute_query)
-        graph.add_node("check_result", self._check_result)
-        graph.add_node("retry_query", self._retry_query)
+        graph.add_node("call_tool_model", self._call_tool_model)
+        graph.add_node("execute_tool_calls", self._execute_tool_calls)
         graph.add_node("generate_answer", self._generate_answer)
         graph.add_node("persist_context", self._persist_context)
 
         graph.add_edge(START, "prepare_turn")
         graph.add_edge("prepare_turn", "resolve_context")
         graph.add_edge("resolve_context", "recognize_intent")
-        graph.add_edge("recognize_intent", "select_data_source")
-        graph.add_conditional_edges("select_data_source", self._route_after_source, {"finish": "generate_answer", "continue": "structure_question"})
-        graph.add_edge("structure_question", "retrieve_context")
+        graph.add_edge("recognize_intent", "structure_question")
+        graph.add_edge("structure_question", "select_data_source")
+        graph.add_conditional_edges("select_data_source", self._route_after_source, {"finish": "generate_answer", "continue": "build_query_plan"})
+        graph.add_edge("build_query_plan", "retrieve_context")
         graph.add_conditional_edges(
             "retrieve_context",
             self._route_after_retrieval,
-            {"clarify": "generate_answer", "continue": "build_query_plan"},
+            {"clarify": "generate_answer", "continue": "call_tool_model"},
         )
-        graph.add_edge("build_query_plan", "generate_sql")
-        graph.add_conditional_edges("generate_sql", self._route_after_generation, {"clarify": "generate_answer", "validate": "validate_sql"})
-        graph.add_conditional_edges("validate_sql", self._route_after_validation, {"execute": "execute_query", "retry": "retry_query", "failed": END})
-        graph.add_conditional_edges("execute_query", self._route_after_execution, {"check": "check_result", "retry": "retry_query", "failed": END})
-        graph.add_edge("check_result", "generate_answer")
-        graph.add_conditional_edges(
-            "retry_query",
-            self._route_after_generation,
-            {"clarify": "generate_answer", "validate": "validate_sql"},
-        )
+        graph.add_conditional_edges("call_tool_model", self._route_after_tool_model,
+            {"execute": "execute_tool_calls", "answer": "generate_answer",
+             "clarify": "generate_answer", "failed": END})
+        graph.add_conditional_edges("execute_tool_calls", self._route_after_tool_execution,
+            {"continue": "call_tool_model", "failed": END})
         graph.add_edge("generate_answer", "persist_context")
         graph.add_edge("persist_context", END)
         return graph.compile(checkpointer=self._checkpointer)
@@ -648,6 +705,16 @@ class MysqlNaturalLanguageAgent:
                     context_resolution_duration_ms=final_state.get(
                         "context_resolution_duration_ms", 0
                     ),
+                    route_suggestion={key: final_state.get("route_suggestion", {}).get(key) for key in
+                        ("intent", "scope", "intent_confidence", "scope_confidence", "intent_probability", "scope_probability", "depends_probability", "multiple_probability", "explicit_import", "explicit_import_probability")
+                        if key in final_state.get("route_suggestion", {})} or None,
+                    route_reason=final_state.get("route_reason") or None,
+                    route_reviewed=bool(final_state.get("route_reviewed")),
+                    route_duration_ms=final_state.get("route_duration_ms", 0),
+                    allowed_tools=final_state.get("allowed_tools", []),
+                    tool_model_calls=final_state.get("tool_model_calls", 0),
+                    tool_call_count=final_state.get("tool_call_count", 0),
+                    successful_queries=final_state.get("successful_queries", 0),
                     **final_state.get("model_usage", {"model_calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}),
                 ),
             )
