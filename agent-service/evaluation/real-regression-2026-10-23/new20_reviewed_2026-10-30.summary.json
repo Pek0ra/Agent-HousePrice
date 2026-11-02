@@ -1,0 +1,7 @@
+{
+  "completed_at": "2026-10-29T18:08:19.541507+00:00",
+  "cases": 20,
+  "http_200": 20,
+  "scoring_status": "unscored_reviewed_gold_available",
+  "gold_standard": "D:\\Github\\Agent-HousePrice\\agent-service\\evaluation\\real-regression-2026-10-23\\human_annotation_reviewed.csv"
+}

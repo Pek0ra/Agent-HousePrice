@@ -1,0 +1,88 @@
+name: Agent evaluation
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      live_20:
+        description: "Call the real Agent service (may consume model quota)"
+        type: boolean
+        required: true
+        default: false
+
+jobs:
+  deterministic:
+    name: Agent fast tests and replay
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Agent test dependencies
+        run: python -m pip install -e './agent-service[dev]' -r agent-service/requirements-policy.txt
+      - name: Run fast offline pytest suite
+        env:
+          PYTHONPATH: agent-service
+        run: python -m pytest -q -m 'not integration' agent-service/tests --junitxml=artifacts/pytest-fast.xml
+      - name: Validate standard and replay saved 20 responses
+        if: always()
+        env:
+          PYTHONPATH: agent-service
+        run: |
+          python -m app.evaluation.reviewed20 validate
+          python -m app.evaluation.reviewed20 score --raw agent-service/tests/data/reviewed20_replay.jsonl --output eval-ci
+          python -c "import json,pathlib; s=json.loads(pathlib.Path('eval-ci/summary.json').read_text()); assert s['cases']==20 and s['http_success']==20"
+          cat eval-ci/report.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload JUnit test report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: agent-pytest-junit
+          path: artifacts/pytest-fast.xml
+          if-no-files-found: error
+      - name: Upload replay report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: agent-evaluation-replay
+          path: eval-ci/
+          if-no-files-found: warn
+
+  live_20:
+    if: github.event_name == 'workflow_dispatch' && inputs.live_20
+    needs: deterministic
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PYTHONPATH: agent-service
+      AGENT_EVAL_ENDPOINT: ${{ vars.AGENT_EVAL_ENDPOINT }}
+      OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+      JEV_MODEL: ${{ vars.JEV_MODEL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Require reachable configured endpoint
+        run: |
+          if [ -z "$AGENT_EVAL_ENDPOINT" ]; then
+            echo 'Set repository variable AGENT_EVAL_ENDPOINT to a reachable /api/v1/chat URL.' >&2
+            exit 2
+          fi
+      - name: Run and score all 20 cases
+        run: python -m app.evaluation.reviewed20 all --endpoint "$AGENT_EVAL_ENDPOINT" --output live-result
+      - name: Score frozen replay and compare
+        run: |
+          python -m app.evaluation.reviewed20 score --raw agent-service/tests/data/reviewed20_replay.jsonl --output replay-baseline
+          python -m app.evaluation.reviewed20 compare --old replay-baseline --new live-result --output live-result/comparison.json
+      - name: Upload live evaluation report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: agent-evaluation-live
+          path: |
+            live-result/
+            replay-baseline/
+          if-no-files-found: warn

@@ -36,6 +36,10 @@ def test_allows_aggregate_query_and_adds_limit(validator: SqlValidator) -> None:
         "SELECT city INTO OUTFILE '/tmp/data' FROM v_agent_house_listing",
         "SELECT city FROM v_agent_house_listing FOR UPDATE",
         "SELECT city FROM another_database.v_agent_house_listing",
+        "SELECT city FROM v_agent_house_listing -- hide a predicate",
+        "SELECT LOAD_FILE('/etc/passwd') FROM v_agent_house_listing",
+        "SELECT city FROM v_agent_house_listing LIMIT ?",
+        "UPDATE v_agent_house_listing SET city = '上海市'",
     ],
 )
 def test_rejects_unsafe_queries(validator: SqlValidator, sql: str) -> None:

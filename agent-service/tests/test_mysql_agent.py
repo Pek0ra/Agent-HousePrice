@@ -15,6 +15,7 @@ from app.agents.conversation import extract_explicit_slots
 from app.database.mysql import ALLOWED_COLUMNS
 from app.database.hive import HIVE_ALLOWED_COLUMNS
 from langchain_core.messages import AIMessage, ToolMessage
+from app.tools import build_tool_registry
 
 
 class FakeDatabase:
@@ -150,6 +151,12 @@ class FakeJevClient:
 
 def make_agent(*args, **kwargs):
     kwargs.setdefault("jev_client", FakeJevClient())
+    settings = args[0]
+    mysql = kwargs.get("database") or FakeDatabase()
+    hive = kwargs.get("hive_database")
+    kwargs.setdefault("mcp_client_factory", lambda source, tables: build_tool_registry(
+        settings=settings, source=source, selected_tables=tables,
+        mysql_database=mysql, hive_database=hive))
     return MysqlNaturalLanguageAgent(*args, **kwargs)
 
 
@@ -174,6 +181,57 @@ def suggestion(intent, source, confidence=0.99, depends=False, multiple=False):
         multiple_probability=0.99 if multiple else 0.01)
 
 
+def test_ambiguous_district_rent_requires_choice_and_keeps_thread_context(tmp_path):
+    import json
+    class RentDatabase(FakeDatabase):
+        def execute_read_only(self, sql):
+            self.executed_sqls.append(sql)
+            if "avg_monthly_rent" in sql:
+                return ["district", "avg_monthly_rent"], [["福田区", 10768.49]]
+            if "max_monthly_rent" in sql:
+                return ["district", "max_monthly_rent"], [["南山区", 30000.0]]
+            raise AssertionError(sql)
+    class RentModel(FakeStructuredModel):
+        def invoke(self, messages):
+            if self.schema is None and isinstance(messages[-1], ToolMessage):
+                result = json.loads(messages[-1].content)
+                row = result["data"]["rows"][0]
+                return AIMessage(content=f"{row[0]}：{row[1]}元/月。")
+            return super().invoke(messages)
+    question = "深圳出租样本月租最高的区是哪一个？"
+    for choice, column, district, value in (
+        ("各区平均月租", "avg_monthly_rent", "福田区", 10768.49),
+        ("区内最贵单套房源的月租", "max_monthly_rent", "南山区", 30000.0),
+    ):
+        db = RentDatabase()
+        model = RentModel([QueryPlan(needs_clarification=False, sql="SELECT 1")])
+        agent = make_agent(Settings(openai_api_key="test-key", checkpoint_db_path=str(tmp_path / (column + ".sqlite"))),
+            database=db, model=model, audit_repository=FakeAuditRepository())
+        first = agent.ask(question)
+        assert "各区的平均月租" in first.answer and "单套房源的最高月租" in first.answer
+        assert first.sql is None and first.details.tool_call_count == 0
+        assert agent.get_conversation_state(first.thread_id)["conversation_context"]["cities"] == ["深圳市"]
+        second = agent.ask(choice, first.thread_id)
+        assert second.thread_id == first.thread_id
+        assert column in second.sql and "city = '深圳市'" in second.sql
+        assert "listing_type = 'RENT'" in second.sql
+        assert second.rows == [[district, value]]
+        assert district in second.answer and str(value) in second.answer
+        assert not agent.get_conversation_state(first.thread_id)["conversation_context"]["pending_metric_choice"]
+
+
+def test_explicit_district_rent_basis_does_not_clarify(tmp_path):
+    for question in ("深圳出租样本各区平均月租最高的是哪里？",
+                     "深圳出租样本区内最贵单套房源月租最高的是哪里？"):
+        db = FakeDatabase(rows=[["福田区", 10768.49]], columns=["district", "avg_monthly_rent"])
+        model = FakeStructuredModel([QueryPlan(needs_clarification=False, sql="SELECT 1")])
+        agent = make_agent(Settings(openai_api_key="test-key", checkpoint_db_path=str(tmp_path / (str(len(question)) + ".sqlite"))),
+            database=db, model=model, audit_repository=FakeAuditRepository())
+        result = agent.ask(question)
+        assert result.details.successful_queries == 1
+        assert result.sql is not None
+
+
 def test_jev_low_confidence_gets_one_structured_review():
     jev = StaticJevClient(suggestion("listing_search", "mysql", confidence=0.4))
     model = FakeStructuredModel([_rent_plan()], reviews=[RouteReview(
@@ -186,13 +244,27 @@ def test_jev_low_confidence_gets_one_structured_review():
     assert response.details.allowed_tools == ["lookup_metric_definition", "get_mysql_schema", "query_mysql_readonly"]
 
 
+def test_reviewed_combined_intent_keeps_jev_listing_scope():
+    jev = StaticJevClient(suggestion("aggregation", "mysql", confidence=0.4))
+    model = FakeStructuredModel([_rent_plan()], reviews=[RouteReview(
+        intent="policy_listing", scope="policy", depends_on_previous=False, multiple_tasks=True)])
+    agent = make_agent(_settings(), database=FakeDatabase(), model=model,
+                       audit_repository=FakeAuditRepository(), jev_client=jev)
+    response = agent.ask("北京项目房源均价是多少，并结合公积金政策？")
+    assert response.details.data_source == "mysql"
+    assert response.details.route_reason == "low_confidence:scope_reconciled"
+    assert response.details.successful_queries == 1
+
+
 def test_jev_timeout_reviews_then_clarifies_if_review_fails():
     jev = StaticJevClient(error=TimeoutError("private-host"))
     model = FakeStructuredModel([])
     response = make_agent(_settings(), database=FakeDatabase(), model=model,
         audit_repository=FakeAuditRepository(), jev_client=jev).ask("上海房价多少？")
     assert response.sql is None
-    assert response.details.route_reason == "jev_unavailable_review_failed"
+    assert response.details.route_reason == "jev_unavailable"
+    assert "意图识别服务暂不可用" in response.answer
+    assert model.invoke_count == 0
     assert "private-host" not in response.model_dump_json()
 
 
@@ -225,7 +297,7 @@ def test_graph_executes_validated_query_and_returns_contract() -> None:
         [
             QueryPlan(
                 needs_clarification=False,
-                sql="SELECT AVG(monthly_rent) AS avg_monthly_rent FROM v_agent_house_listing",
+                sql="SELECT AVG(monthly_rent) AS avg_monthly_rent FROM v_agent_house_listing WHERE city = '上海市' AND district = '浦东新区' AND listing_type = 'RENT'",
             )
         ]
     )
@@ -400,6 +472,7 @@ def test_workflow_has_checkpointed_context_nodes() -> None:
         "call_tool_model",
         "execute_tool_calls",
         "generate_answer",
+        "policy_answer",
         "persist_context",
     )
 

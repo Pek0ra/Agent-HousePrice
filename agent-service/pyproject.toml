@@ -27,6 +27,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+performance = ["locust>=2.32,<3", "httpx>=0.28,<1.0"]
 dev = [
     "httpx>=0.28,<1.0",
     "pytest>=8.4,<10.0",
@@ -44,3 +45,10 @@ include = ["app*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+addopts = ["--strict-markers"]
+markers = [
+    "unit: isolated business logic and local test doubles",
+    "api: FastAPI request and response contract tests",
+    "integration: local subprocess or infrastructure integration tests",
+    "evaluation: deterministic dataset and saved-response evaluation tests",
+]

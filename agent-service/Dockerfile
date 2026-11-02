@@ -18,6 +18,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     python -m pip install --index-url "$PIP_INDEX_URL" .
 
 COPY app ./app
+COPY tests/data ./tests/data
 
 RUN python -m pip install --no-deps . && \
     mkdir -p /data/checkpoints /tmp/fastembed_cache && \
