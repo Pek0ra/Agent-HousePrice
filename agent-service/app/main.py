@@ -2,6 +2,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import Response
+import time
 
 from app.agents.mysql_agent import AgentCheckpointError
 from app.api.routes import router
@@ -9,7 +10,9 @@ from app.config import settings
 
 
 async def add_json_utf8_charset(request: Request, call_next) -> Response:
+    started = time.perf_counter()
     response = await call_next(request)
+    response.headers["X-Server-Duration-Ms"] = f"{(time.perf_counter() - started) * 1000:.3f}"
     content_type = response.headers.get("content-type", "")
     if (
         content_type.lower().startswith("application/json")

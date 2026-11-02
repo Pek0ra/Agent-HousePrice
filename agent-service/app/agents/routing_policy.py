@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
+from typing import Any
 
 from app.agents.jev_router import RouteSuggestion, ScopeChoice, SCOPE_SOURCE
+from app.agents.conversation import DEPENDENCY_PATTERN, rent_basis_choice
 
 
 @dataclass(frozen=True)
@@ -15,6 +18,32 @@ class RouteDecision:
     reason: str
     needs_clarification: bool = False
     clarification_question: str | None = None
+
+
+def inherit_followup_route(question: str, previous: dict[str, Any] | None,
+                           intent: str, scope: str, depends: bool) -> tuple[str, str, bool]:
+    """Continue a known task when the user explicitly refers to that task.
+
+    Jev still identifies a new task; this only repairs anaphora against a
+    previously routed, structured turn. It never grants new SQL permissions.
+    """
+    old = previous or {}
+    old_intent, old_scope = old.get("intent"), old.get("requested_scope")
+    if old.get("pending_metric_choice") and rent_basis_choice(question) and old_intent and old_scope:
+        return old_intent, old_scope, True
+    if not old.get("previous_question") or not old_intent or not (depends or DEPENDENCY_PATTERN.search(question)):
+        return intent, scope, depends
+    depends = True
+    if old_intent == "policy_listing" and (intent in {"policy", "comparison", "clarify", "policy_listing"}):
+        return "policy_listing", old_scope or "current_listing", depends
+    if intent == "clarify" and old_intent not in {"unsupported", "unsafe_request", "clarify"}:
+        return old_intent, old_scope or scope, depends
+    if scope == "none" and old_scope in {"current_listing", "active_import", "import_quality"}:
+        return intent, old_scope, depends
+    if old_scope == "active_import" and scope == "current_listing" and not re.search(
+        r"项目房源|MySQL|mysql|当前挂牌", question):
+        return intent, "active_import", depends
+    return intent, scope, depends
 
 
 def review_reason(suggestion: RouteSuggestion, *, threshold: float, noul_margin: float) -> str | None:
@@ -28,6 +57,10 @@ def review_reason(suggestion: RouteSuggestion, *, threshold: float, noul_margin:
         (suggestion.depends_probability, suggestion.multiple_probability)
     ):
         return "positive_boolean_review"
+    if suggestion.intent == "policy" and suggestion.scope != "policy":
+        return "intent_scope_conflict"
+    if suggestion.intent == "policy_listing" and suggestion.scope not in {"current_listing", "active_import"}:
+        return "intent_scope_conflict"
     if suggestion.intent in {"unsupported", "clarify"} and suggestion.scope != "none":
         return "intent_scope_conflict"
     if suggestion.intent not in {"unsupported", "clarify"} and suggestion.scope == "none":
@@ -41,7 +74,17 @@ def review_reason(suggestion: RouteSuggestion, *, threshold: float, noul_margin:
 
 def decide_route(intent: str, scope: ScopeChoice, *, hive_available: bool,
                  multiple_tasks: bool, has_history: bool, depends_on_previous: bool,
-                 explicit_import: bool = False) -> RouteDecision:
+                 explicit_import: bool = False, row_granularity: str | None = None) -> RouteDecision:
+    if intent == "policy":
+        return RouteDecision("policy", "policy", (), "accepted") if scope == "policy" else RouteDecision("clarify", "none", (), "scope_conflict", True, "请明确需要查询的政策。")
+    if intent == "policy_listing":
+        if explicit_import and scope != "active_import":
+            return RouteDecision("clarify", "none", (), "explicit_import_conflict", True, "明确指定 CSV 导入数据时需要选择 Hive 数据源。")
+        if scope == "current_listing":
+            return RouteDecision("policy_listing", "mysql", ("v_agent_house_listing",), "accepted")
+        if scope == "active_import" and hive_available:
+            return RouteDecision("policy_listing", "hive", ("v_agent_house_info_analysis",), "accepted")
+        return RouteDecision("clarify", "none", (), "hive_required" if scope == "active_import" else "scope_conflict", True, "CSV 导入数据组合查询需要启用 Hive；请明确数据来源。")
     if multiple_tasks:
         return RouteDecision("clarify", "none", (), "multiple_tasks", True, "请先选择其中一个查询任务。")
     if depends_on_previous and not has_history:
@@ -69,7 +112,7 @@ def decide_route(intent: str, scope: ScopeChoice, *, hive_available: bool,
         return RouteDecision(intent, source, ("v_agent_house_info_analysis",), "accepted")
     if intent == "trend":
         table = "v_agent_monthly_price_trend"
-    elif intent in {"ranking", "comparison"}:
+    elif intent in {"ranking", "comparison"} and row_granularity != "listing":
         table = "v_agent_district_summary"
     else:
         table = "v_agent_house_listing"

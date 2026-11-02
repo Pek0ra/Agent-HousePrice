@@ -1,6 +1,14 @@
 name: agent-house-price
 
 services:
+  qdrant:
+    image: qdrant/qdrant:v1.13.6
+    restart: unless-stopped
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
   mysql:
     image: mysql:8.0
     container_name: agent-house-price-mysql
@@ -92,6 +100,12 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4.1-mini}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
+      JEV_MODEL: ${JEV_MODEL:-jev-latest}
+      JEV_ENDPOINT: ${JEV_ENDPOINT:-https://api.typesafe.ai/v1/systemone}
+      JEV_TIMEOUT_SECONDS: ${JEV_TIMEOUT_SECONDS:-5}
+      JEV_CONFIDENCE_THRESHOLD: ${JEV_CONFIDENCE_THRESHOLD:-0.7}
+      JEV_NOUL_MARGIN: ${JEV_NOUL_MARGIN:-0.15}
       CORS_ORIGINS: ${AGENT_CORS_ORIGINS:-http://localhost:9900,http://127.0.0.1:9900}
       JAVA_BACKEND_URL: http://java-backend:9900
       MYSQL_HOST: mysql
@@ -108,6 +122,7 @@ services:
       CONVERSATION_HISTORY_MAX_MESSAGES: ${CONVERSATION_HISTORY_MAX_MESSAGES:-8}
       CONVERSATION_HISTORY_MAX_CHARS: ${CONVERSATION_HISTORY_MAX_CHARS:-6000}
       LANGGRAPH_STRICT_MSGPACK: "true"
+      POLICY_QDRANT_LOCATION: http://qdrant:6333
       BIG_DATA_ENABLED: ${BIG_DATA_ENABLED:-false}
       HIVE_HOST: ${HIVE_HOST:-hiveserver2}
       HIVE_PORT: ${HIVE_INTERNAL_PORT:-10000}
@@ -119,6 +134,8 @@ services:
       - "${AGENT_PORT:-8000}:8000"
     volumes:
       - agent_checkpoints:/data/checkpoints
+      - policy_model_cache:/tmp/fastembed_cache
+      - ./data/RAG/normalized:/data/RAG/normalized:ro
     healthcheck:
       test:
         - CMD
@@ -382,6 +399,10 @@ services:
       - /hive-init/migrate-and-init.sh
 
 volumes:
+  policy_model_cache:
+    name: agent-house-price-policy-model-cache
+  qdrant_data:
+    name: agent-house-price-qdrant-data
   mysql_data:
     name: agent-house-price-mysql-data
   java_data:

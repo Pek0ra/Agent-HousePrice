@@ -16,7 +16,7 @@ def route_review_messages(
 ) -> list[SystemMessage | HumanMessage]:
     return [
         SystemMessage(
-            "对当前房产问数请求做一次结构化路由复核。intent 只能为 " + ", ".join(INTENT_CRITERIA) +
+            "对当前房产数据或北京购房政策请求做一次结构化路由复核。政策与普通样本组合选 policy_listing/current_listing；明确指定 CSV 导入数据则选 policy_listing/active_import。intent 只能为 " + ", ".join(INTENT_CRITERIA) +
             "，规则：" + json.dumps(INTENT_CRITERIA, ensure_ascii=False) +
             "。scope 只能为 " + ", ".join(SCOPE_CRITERIA) +
             "，规则：" + json.dumps(SCOPE_CRITERIA, ensure_ascii=False) +

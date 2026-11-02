@@ -47,6 +47,9 @@ class MysqlQueryDatabase:
             pool_recycle=1800,
         )
 
+    def close(self) -> None:
+        self._engine.dispose()
+
     @property
     def allowed_tables(self) -> set[str]:
         return set(ALLOWED_COLUMNS)

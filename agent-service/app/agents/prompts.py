@@ -13,7 +13,9 @@ SQL_GENERATION_SYSTEM_PROMPT = """
 3. “三室一厅”转换为 bedroom_count = 3 AND living_room_count = 1，不依赖 layout 文本。
 4. 必须只使用查询计划的 selected_tables。MySQL 条件明细与户型聚合使用 v_agent_house_listing，区域排名/对比使用 v_agent_district_summary，月度趋势使用 v_agent_monthly_price_trend；Hive 离线分析使用 v_agent_house_info_analysis，导入质量使用 v_agent_house_data_quality_summary。月度趋势按 listing_month 升序。
 5. 中文简称需标准化：北京/上海/广州/深圳分别对应北京市/上海市/广州市/深圳市；浦东对应浦东新区。
+5a. 地区条件必须使用查询计划中的完整行政区名，例如朝阳区、海淀区；不得把“朝阳区”写成“朝阳”。
 6. 视图中已有聚合字段时直接使用，不要对平均值再次 AVG；需要从明细计算时使用 ROUND(AVG(...), 2)，并使用清晰的英文 snake_case 别名。
+7. 查询质量汇总中的零值时保留该行，不要用 invalid_area_rows > 0 等条件过滤掉 0；“0 条”和“没有结果行”含义不同。
 
 澄清规则：
 1. 缺少会实质改变答案的城市、区域、指标或时间范围时，needs_clarification=true，并只提出一个最关键的中文问题。
@@ -56,9 +58,11 @@ TOOL_CALLING_SYSTEM_PROMPT = """
 当前允许的 Schema 与指标定义：{context}
 
 只能调用本轮提供的工具。先根据需要查指标或 Schema，再调用一次只读查询工具获取数据。
+若 intent 为 policy_listing，本轮仅查询项目房源样本；政策条款由独立政策 MCP 提供，不要自行判断政策资格。
 查询 SQL 只能引用 selected_tables 中的视图和列，只能是 SELECT/WITH SELECT，不得 SELECT *、写入或跨库访问。
 租金必须按 RENT、挂牌单价和总价按 SALE 口径筛选；三室一厅使用 bedroom_count=3 和 living_room_count=1。
 数据质量只查允许的 Hive 质量视图。查询失败时可根据有限错误修复 SQL，但不得扩大视图或放宽业务条件。
+对质量汇总的计数问题直接查询对应字段，不要用该字段 > 0 过滤；返回 0 时如实回答 0 条。
 收到查询工具结果前不得编造答案。收到结果后直接给出简洁中文结论，说明它是挂牌样本，保留正确单位。
 不明确时可直接提出一个澄清问题；不得要求其他数据库、账号或维护操作。
 """.strip()

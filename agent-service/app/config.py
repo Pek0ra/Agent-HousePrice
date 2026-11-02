@@ -27,6 +27,7 @@ class Settings:
     openai_base_url: str | None = os.getenv("OPENAI_BASE_URL") or None
     typesafe_api_key: str | None = os.getenv("TYPESAFE_API_KEY") or None
     jev_model: str = os.getenv("JEV_MODEL", "jev-latest")
+    jev_endpoint: str = os.getenv("JEV_ENDPOINT", "https://api.typesafe.ai/v1/systemone")
     jev_timeout_seconds: float = float(os.getenv("JEV_TIMEOUT_SECONDS", "5"))
     jev_confidence_threshold: float = float(os.getenv("JEV_CONFIDENCE_THRESHOLD", "0.7"))
     jev_noul_margin: float = float(os.getenv("JEV_NOUL_MARGIN", "0.15"))
@@ -63,6 +64,9 @@ class Settings:
     hive_database: str = os.getenv("HIVE_DATABASE", "mydb")
     hive_username: str = os.getenv("HIVE_USERNAME", "hive")
     hive_auth: str = os.getenv("HIVE_AUTH", "NONE")
+    mcp_server_command: str = os.getenv("MCP_SERVER_COMMAND", "")
+    mcp_server_module: str = os.getenv("MCP_SERVER_MODULE", "app.mcp_server")
+    policy_qdrant_location: str = os.getenv("POLICY_QDRANT_LOCATION", "data/policy_qdrant")
     cors_origins: tuple[str, ...] = _cors_origins()
 
 

@@ -11,12 +11,14 @@ Intent = Literal[
     "comparison",
     "trend",
     "data_quality",
+    "policy",
+    "policy_listing",
     "clarify",
     "unsafe_request",
     "unsupported",
 ]
-DataSource = Literal["mysql", "hive", "none"]
-RequestedScope = Literal["current_listing", "active_import", "import_quality", "none"]
+DataSource = Literal["mysql", "hive", "policy", "none"]
+RequestedScope = Literal["current_listing", "active_import", "import_quality", "policy", "none"]
 
 
 class ValidationResult(TypedDict):
@@ -60,6 +62,7 @@ class AgentWorkflowState(TypedDict, total=False):
     final_answer: str
     chart_config: dict[str, Any] | None
     needs_clarification: bool
+    metric_basis_ambiguity: bool
     clarification_question: str | None
     error: str
     raw_unsafe_detected: bool
@@ -70,6 +73,11 @@ class AgentWorkflowState(TypedDict, total=False):
     route_reason: str
     route_reviewed: bool
     route_duration_ms: int
+    jev_duration_ms: float | None
+    jev_error_category: str | None
+    qdrant_duration_ms: float | None
+    rerank_duration_ms: float | None
+    query_durations: list[dict[str, Any]]
     allowed_tools: list[str]
     tool_transcript: Annotated[list[Any] | None, UntrackedValue]
     pending_tool_calls: Annotated[list[dict[str, Any]] | None, UntrackedValue]
@@ -77,3 +85,7 @@ class AgentWorkflowState(TypedDict, total=False):
     tool_model_calls: int
     tool_call_count: int
     successful_queries: int
+    policy_evidence: list[dict[str, Any]]
+    policy_limitations: list[str]
+    policy_tool_calls: list[dict[str, Any]]
+    dependency_unavailable: bool

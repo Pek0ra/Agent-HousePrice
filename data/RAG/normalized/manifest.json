@@ -1,0 +1,137 @@
+{
+  "schema_version": 1,
+  "documents": [
+    {
+      "original_path": "data/RAG/关于下调个人住房公积金贷款利率的公告.pdf",
+      "original_sha256": "def551af5d31cd3337f7ebf8615d80f6fd5cf899f75019876ee5413dcfa3dddc",
+      "recipe_sha256": "089196f788e01dae5a539549fb243b72e941f575b1f91714f1b3330b18573992",
+      "markdown_path": "data/RAG/normalized/bj-gjj-rate-2025-05-08.md",
+      "text_source": "official_html",
+      "status": "machine_checked",
+      "missing_metadata": [
+        "document_number",
+        "effective_date"
+      ],
+      "sampled_expressions": [
+        "2.1",
+        "2.6",
+        "2.525",
+        "3.075",
+        "2026年1月1日"
+      ]
+    },
+    {
+      "original_path": "data/RAG/北京市住房和城乡建设委员会 北京住房公积金管理中心关于进一步优化调整本市房地产相关政策的通知.pdf",
+      "original_sha256": "1aec55022a8ff1cebf654ae0654781a3844c0cb19c058377d7e53e86062f2016",
+      "recipe_sha256": "4bc57a292c820110b520888ce6b6c4d36d6550b821df93be564115b9e122af27",
+      "markdown_path": "data/RAG/normalized/bj-housing-2025-360.md",
+      "text_source": "official_html",
+      "status": "machine_checked",
+      "missing_metadata": [],
+      "sampled_expressions": [
+        "100万元",
+        "30%",
+        "15万元",
+        "2025年8月9日"
+      ]
+    },
+    {
+      "original_path": "data/RAG/北京市住房和城乡建设委员会 北京市规划和自然资源委员会 北京住房公积金管理中心关于进一步优化调整本市房地产政策的通知.pdf",
+      "original_sha256": "1678381f766e94679f95dc1f60f0a913cfc44a5087ee02d122ffeb56ee867a35",
+      "recipe_sha256": "5863990bd008b0958b6a6f04a0ccf912b205ce96a961bf55cdaee3bbe84cb3de",
+      "markdown_path": "data/RAG/normalized/bj-housing-2026-400.md",
+      "text_source": "official_html",
+      "status": "machine_checked",
+      "missing_metadata": [
+        "effective_date"
+      ],
+      "sampled_expressions": [
+        "120万元",
+        "240万元",
+        "50%",
+        "25万元",
+        "10年"
+      ]
+    },
+    {
+      "original_path": "data/RAG/北京市住房和城乡建设委员会等部门关于优化本市房地产市场平稳健康发展政策措施的通知_规范性文件_首都之窗_北京市人民政府门户网站.pdf",
+      "original_sha256": "bbb2f5336079882399d804ee90143f44f0067aa670847c7838e483b860153da2",
+      "recipe_sha256": "ed7d70865e2119ea0eff68301fec93cb23931da0271aea68c0c1a1fff99ecfe6",
+      "markdown_path": "data/RAG/normalized/bj-housing-2024-218.md",
+      "text_source": "official_html",
+      "status": "machine_checked",
+      "missing_metadata": [],
+      "sampled_expressions": [
+        "二孩及以上",
+        "首套住房",
+        "次日起施行"
+      ]
+    },
+    {
+      "original_path": "data/RAG/北京市住房和城乡建设委员会等部门关于进一步优化调整本市房地产相关政策的通知.pdf",
+      "original_sha256": "60c7c22bd3edb26ba50898e1d50bd3682969889c2b64c9a9535ff2107b7e78a2",
+      "recipe_sha256": "f42a2618a10484e719375ff3301faeadfa797381abdc0caa2634b9e91ba4fea8",
+      "markdown_path": "data/RAG/normalized/bj-housing-2025-565-bulletin.md",
+      "text_source": "official_html",
+      "status": "machine_checked",
+      "missing_metadata": [],
+      "sampled_expressions": [
+        "2年及以上",
+        "1年及以上",
+        "25%",
+        "2025年12月24日"
+      ]
+    },
+    {
+      "original_path": "data/RAG/北京市住房和城乡建设委员会等部门关于进一步优化调整本市房地产相关政策的通知_政策文件_首都之窗_北京市人民政府门户网站.pdf",
+      "original_sha256": "0314cfe7122af96662e8d08106c9ec71e27f3b0fcf19f52b8276b7d80fe8002b",
+      "recipe_sha256": "3a036f3cbbd085109b3dbae82940f9e253c010e3037f124df7c32223c8c9fa40",
+      "markdown_path": "data/RAG/normalized/bj-housing-2024-400-web.md",
+      "text_source": "official_html",
+      "status": "machine_checked",
+      "missing_metadata": [],
+      "sampled_expressions": [
+        "15%",
+        "20%",
+        "3年及以上",
+        "40万元",
+        "2024年10月1日"
+      ]
+    },
+    {
+      "original_path": "data/RAG/财政部 税务总局 住房城乡建设部关于促进房地产市场平稳健康发展有关税收政策的公告.doc",
+      "original_sha256": "8dc8af0018c200b682670294cbe60c029a469849c845ad079fe12194c8e9fe7b",
+      "recipe_sha256": "c4ba2d70bcc0255c2c5dfbf455d9c722afd6ad2067fb8934ff7921d6142d5e6a",
+      "markdown_path": "data/RAG/normalized/tax-2024-16.md",
+      "text_source": "mhtml_html",
+      "status": "machine_checked",
+      "missing_metadata": [
+        "retrieved_at"
+      ],
+      "sampled_expressions": [
+        "140平方米",
+        "1.5%",
+        "2%",
+        "20%",
+        "2024年12月1日"
+      ]
+    },
+    {
+      "original_path": "data/RAG/财政部 税务总局 住房城乡建设部关于延续实施支持居民换购住房有关个人所得税政策的公告.doc",
+      "original_sha256": "59cffab764a71bc02266de4cd7b1c732c9d1501456eca62c180bc28dd875f788",
+      "recipe_sha256": "289d7932657edcc8d1d2fab2d8fc410341ff4fc66228fb0a6f6bebd246fdaf8a",
+      "markdown_path": "data/RAG/normalized/tax-2026-3.md",
+      "text_source": "mhtml_html",
+      "status": "machine_checked",
+      "missing_metadata": [
+        "retrieved_at"
+      ],
+      "sampled_expressions": [
+        "2027年12月31日",
+        "1年内",
+        "同一城市范围",
+        "产权人之一"
+      ]
+    }
+  ]
+}

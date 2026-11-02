@@ -6,16 +6,20 @@ Contract: https://docs.typesafe.ai/api (Choice and Noul answers).
 from __future__ import annotations
 
 import json
+from http.client import RemoteDisconnected
 from typing import Any, Literal
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 
-IntentChoice = Literal["listing_search", "aggregation", "ranking", "comparison", "trend", "data_quality", "unsupported", "clarify"]
-ScopeChoice = Literal["current_listing", "active_import", "import_quality", "none"]
+IntentChoice = Literal["listing_search", "aggregation", "ranking", "comparison", "trend", "data_quality", "policy", "policy_listing", "unsupported", "clarify"]
+ScopeChoice = Literal["current_listing", "active_import", "import_quality", "policy", "none"]
 
 INTENT_CRITERIA = {
+    "policy": "查询北京住房、公积金或房产税收政策的条款、适用条件、历史版本或时效。",
+    "policy_listing": "同时查询北京购房政策和项目房源样本或明确指定的 CSV 导入数据，并结合两类证据回答。",
     "listing_search": "列出或筛选单条房源明细。",
     "aggregation": "在单个范围内求数量、均值、最大值或最小值等标量；某区最高月租是多少也属此类。",
     "ranking": "跨地区或群体排序、前 N 名、最高或最低的地区；单个范围求极值不属此类。",
@@ -26,6 +30,7 @@ INTENT_CRITERIA = {
     "clarify": "缺少必要对象或指代上文但没有可用上文，例如单说'哪个更高'。",
 }
 SCOPE_CRITERIA = {
+    "policy": "只需政策条款，不需房源数据。",
     "current_listing": (
         "默认口径：普通挂牌售房/出租房问数，包括明细、数量、均价、极值、按区排序和比较、"
         "按挂牌月份统计的趋势。平均、批量统计、多个月、历史挂牌日期都不自动改选导入数据集。"
@@ -40,8 +45,10 @@ SCOPE_CRITERIA = {
 }
 
 SCOPE_SOURCE = {
-    "current_listing": "mysql", "active_import": "hive", "import_quality": "hive", "none": "none",
+    "current_listing": "mysql", "active_import": "hive", "import_quality": "hive", "policy": "policy", "none": "none",
 }
+INTENT_CRITERIA["unsupported"] = "不属于房源数据或北京住房政策的请求，例如预测、真实成交、写入管理操作。"
+SCOPE_CRITERIA["none"] = "无法理解或不支持的任务，包括预测、真实成交、写入删除操作。"
 EXPLICIT_IMPORT_CRITERIA = {
     "yes": "问题明确点名 Hive/Hive 分析视图、当前已激活的离线或 CSV 导入数据集，或导入标识 dataset_id、import_task_id、source_record_id。",
     "no": "没有明确指定这些导入数据来源；普通挂牌问题，即使有均值、排名或月度趋势也选 no。",
@@ -49,7 +56,9 @@ EXPLICIT_IMPORT_CRITERIA = {
 
 
 class JevUnavailable(RuntimeError):
-    pass
+    def __init__(self, message: str, category: str = "jev_unavailable"):
+        super().__init__(message)
+        self.category = category
 
 
 class ChoiceAnswer(BaseModel):
@@ -152,4 +161,9 @@ class JevRoutingClient:
             raise
         except Exception as exc:
             # Never include HTTP/SDK exception text: it may contain endpoint or credentials.
-            raise JevUnavailable("Jev routing unavailable") from exc
+            reason = exc.reason if isinstance(exc, URLError) and not isinstance(exc, HTTPError) else exc
+            category = ("jev_timeout" if isinstance(reason, TimeoutError) else
+                        "jev_rate_or_quota" if isinstance(exc, HTTPError) and exc.code in {402, 429} else
+                        "jev_disconnect" if isinstance(reason, (ConnectionError, RemoteDisconnected)) else
+                        "jev_unavailable")
+            raise JevUnavailable("Jev routing unavailable", category=category) from exc

@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -51,10 +51,22 @@ class ExecutionDetails(BaseModel):
     route_reason: str | None = None
     route_reviewed: bool = False
     route_duration_ms: int = 0
+    jev_duration_ms: float | None = None
+    llm_calls: list[dict[str, Any]] = Field(default_factory=list)
+    llm_duration_ms: float | None = None
+    qdrant_duration_ms: float | None = None
+    rerank_duration_ms: float | None = None
+    mysql_duration_ms: float | None = None
+    hive_duration_ms: float | None = None
+    error_category: str | None = None
     allowed_tools: list[str] = Field(default_factory=list)
     tool_model_calls: int = 0
     tool_call_count: int = 0
     successful_queries: int = 0
+    policy_evidence: list[dict[str, Any]] = Field(default_factory=list)
+    policy_limitations: list[str] = Field(default_factory=list)
+    policy_tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    policy_tool_call_count: int = 0
 
 
 class QuestionSlots(BaseModel):
@@ -63,6 +75,11 @@ class QuestionSlots(BaseModel):
     districts: list[str] = Field(default_factory=list)
     listing_type: str | None = None
     metric: str | None = None
+    metric_basis: str | None = Field(
+        default=None,
+        description="For district rent comparisons: district_average, district_listing_max, or ambiguous.",
+    )
+    row_granularity: str | None = None
     bedroom_count: int | None = None
     living_room_count: int | None = None
     start_month: str | None = None
@@ -74,8 +91,9 @@ class QuestionSlots(BaseModel):
 
 
 class RouteReview(BaseModel):
-    intent: str
-    scope: str
+    intent: Literal["listing_search", "aggregation", "ranking", "comparison", "trend",
+                    "data_quality", "policy", "policy_listing", "clarify", "unsupported", "unsafe_request"]
+    scope: Literal["current_listing", "active_import", "import_quality", "policy", "none"]
     depends_on_previous: bool
     multiple_tasks: bool
 

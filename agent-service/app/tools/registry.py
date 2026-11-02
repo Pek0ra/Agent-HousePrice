@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, datetime
+from decimal import Decimal
 import re
+import time
 from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, ValidationError
@@ -16,9 +19,10 @@ from app.security.sql_validator import SqlValidator, UnsafeSqlError
 from app.tools.contracts import (
     LookupMetricInput, MetricDefinition, MetricLookupOutput, QueryInput, QueryOutput,
     SchemaColumn, SchemaInput, SchemaOutput, SchemaView, ToolError, ToolInput, ToolResult,
+    PolicySearchInput, PolicyReadInput, PolicyOutput,
 )
 
-Source = Literal["mysql", "hive"]
+Source = Literal["mysql", "hive", "policy"]
 
 
 @dataclass(frozen=True)
@@ -68,6 +72,8 @@ class ToolRegistry:
             "get_hive_schema": "查看本轮允许的 Hive Agent 视图及列。无参数。",
             "query_mysql_readonly": "执行受控 MySQL 只读 SQL；只能访问本轮视图。",
             "query_hive_readonly": "执行受控 Hive 只读 SQL；只能访问本轮视图。",
+            "search_policy": "检索经机器检查的北京政策条款，返回原文及来源。",
+            "read_policy_clause": "按检索得到的 chunk_id 读取政策条款。",
         }
         return [
             StructuredTool.from_function(
@@ -88,10 +94,30 @@ def build_tool_registry(
     mysql_database: Any,
     hive_database: Any | None = None,
     retriever: MarkdownBusinessKnowledgeRetriever | None = None,
+    policy_store: Any | None = None,
 ) -> ToolRegistry:
     """Build once per turn from trusted routing state, never from tool arguments."""
-    if source not in ("mysql", "hive"):
+    if source not in ("mysql", "hive", "policy"):
         raise ValueError("Unsupported data source")
+    if source == "policy":
+        if selected_tables:
+            raise ValueError("Policy tools cannot select SQL views")
+        if policy_store is None:
+            from app.rag.policy_store import PolicyStore
+            policy_store = PolicyStore(settings.policy_qdrant_location)
+        def search(value: ToolInput) -> PolicyOutput:
+            assert isinstance(value, PolicySearchInput)
+            return PolicyOutput.model_validate(policy_store.search(value.question, as_of=value.as_of,
+                published_by_date=value.published_by_date, topic=value.topic, limit=value.limit))
+        def read(value: ToolInput) -> PolicyOutput:
+            assert isinstance(value, PolicyReadInput)
+            point = policy_store.client.retrieve("beijing_policy_v1", ids=[value.chunk_id], with_payload=True)
+            evidence = [p.payload for p in point if p.payload["review_status"] == "machine_checked"]
+            from datetime import datetime, timezone
+            return PolicyOutput(retrieved_at=datetime.now(timezone.utc).isoformat(), evidence=evidence,
+                limitations=["条款不存在或尚未人工核对"] if not evidence else [])
+        return ToolRegistry([ToolDefinition("search_policy", PolicySearchInput, PolicyOutput, search),
+                             ToolDefinition("read_policy_clause", PolicyReadInput, PolicyOutput, read)])
     if settings.sql_max_rows < 1:
         raise ValueError("SQL row limit must be positive")
     if source == "hive" and (not settings.big_data_enabled or hive_database is None):
@@ -139,10 +165,19 @@ def build_tool_registry(
     def query(value: ToolInput) -> QueryOutput:
         assert isinstance(value, QueryInput)
         normalized = SqlValidator(set(selected), max_rows=settings.sql_max_rows, dialect=source).validate_and_normalize(value.sql)
+        query_started = time.perf_counter()
         columns, rows = database.execute_read_only(normalized)
+        query_duration_ms = round((time.perf_counter() - query_started) * 1000, 3)
         # Bound even a misbehaving adapter before handing rows to a caller.
-        bounded = [list(row) for row in rows[: settings.sql_max_rows]]
+        def json_value(cell: Any) -> Any:
+            if isinstance(cell, Decimal):
+                return float(cell)
+            if isinstance(cell, (date, datetime)):
+                return cell.isoformat()
+            return cell
+        bounded = [[json_value(cell) for cell in row] for row in rows[: settings.sql_max_rows]]
         return QueryOutput(source=source, sql=normalized, columns=list(columns), rows=bounded,
+                           query_duration_ms=query_duration_ms,
                            row_count=len(bounded), is_empty=not bounded or all(all(cell is None for cell in row) for row in bounded))
 
     definitions = [ToolDefinition("lookup_metric_definition", LookupMetricInput, MetricLookupOutput, lookup)]

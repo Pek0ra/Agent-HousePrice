@@ -14,10 +14,14 @@ CITY_ALIASES = {
 }
 DISTRICT_ALIASES = {
     "浦东": "浦东新区",
+    "朝阳": "朝阳区",
+    "海淀": "海淀区",
     "南山": "南山区",
     "福田": "福田区",
 }
 DISTRICT_CITIES = {
+    "朝阳区": "北京市",
+    "海淀区": "北京市",
     "浦东新区": "上海市",
     "南山区": "深圳市",
     "福田区": "深圳市",
@@ -41,6 +45,9 @@ CONTEXT_FIELDS = (
     "districts",
     "listing_type",
     "metric",
+    "metric_basis",
+    "row_granularity",
+    "requested_scope",
     "bedroom_count",
     "living_room_count",
     "start_month",
@@ -73,18 +80,29 @@ def extract_explicit_slots(question: str) -> dict[str, Any]:
     if districts:
         slots["districts"] = _ordered_unique(districts)
 
-    if re.search(r"(月租金|租金|出租|租赁)", question):
+    if re.search(r"(多少条|多少套|几条|几套|数量|房源数|样本数)", question):
+        slots["metric"] = "listing_count"
+        if re.search(r"(出租|租赁)", question):
+            slots["listing_type"] = "RENT"
+        elif re.search(r"(出售|售房|在售|销售)", question):
+            slots["listing_type"] = "SALE"
+    elif re.search(r"(月租金|租金|月租)", question):
         slots.update(metric="monthly_rent", listing_type="RENT")
     elif "总价" in question:
         slots.update(metric="total_price", listing_type="SALE")
     elif re.search(r"(房价|挂牌单价|单价|均价)", question):
         slots.update(metric="unit_price", listing_type="SALE")
-    elif re.search(r"(数量|多少套|几套)", question):
-        slots["metric"] = "listing_count"
     elif re.search(r"(出售|售房|在售)", question):
         slots.update(metric="listing", listing_type="SALE")
+    elif re.search(r"(出租|租赁)", question):
+        slots.update(metric="listing", listing_type="RENT")
     elif re.search(r"(房源|房子|住宅)", question):
         slots["metric"] = "listing"
+
+    if re.search(r"平均月租|月租均值|月租平均|各区均租", question):
+        slots["metric_basis"] = "district_average"
+    elif re.search(r"单套.{0,8}(最高|最贵).*月租|月租.{0,8}(最高|最贵).*单套|区内最高月租|最贵单套", question):
+        slots["metric_basis"] = "district_listing_max"
 
     room_match = re.search(
         r"([\d一二两三四五六七八九])室([\d一二两三四五六七八九])厅", question
@@ -102,6 +120,14 @@ def extract_explicit_slots(question: str) -> dict[str, Any]:
     rank_match = re.search(r"(?:top\s*|前)(\d+|[一二两三四五六七八九])", question, re.I)
     if rank_match:
         slots["ranking_limit"] = _number(rank_match.group(1))
+    detail_match = re.search(r"([\d一二两三四五六七八九十]+)条(?:挂牌|出售|出租|房源|样本|记录|明细|[\u4e00-\u9fff]{0,5}$)", question)
+    if detail_match:
+        try:
+            slots["ranking_limit"] = _number(detail_match.group(1))
+        except (KeyError, ValueError):
+            pass
+    if re.search(r"(房源明细|单条房源|社区和单价|条挂牌|条房源|条样本|条记录)", question):
+        slots["row_granularity"] = "listing"
 
     if re.search(r"(趋势|走势|月度|每月|按月|变化)", question):
         slots["intent"] = "trend"
@@ -114,6 +140,18 @@ def extract_explicit_slots(question: str) -> dict[str, Any]:
     elif re.search(r"(列出|哪些|查询|查看|房源)", question):
         slots["intent"] = "listing_search"
     return slots
+
+
+def rent_basis_choice(question: str) -> str | None:
+    """Ground a clarification reply in one of the offered business definitions."""
+    explicit = extract_explicit_slots(question).get("metric_basis")
+    if explicit:
+        return explicit
+    if re.search(r"第一种|前者", question):
+        return "district_average"
+    if re.search(r"第二种|后者", question):
+        return "district_listing_max"
+    return None
 
 
 def normalize_question(question: str) -> str:
@@ -134,13 +172,29 @@ def validate_question_slots(slots: QuestionSlots) -> dict[str, Any]:
         if values:
             result[field] = _ordered_unique([aliases.get(value, value) for value in values])
     if slots.metric is not None:
-        if slots.metric not in {"listing", "listing_count", "unit_price", "total_price", "monthly_rent"}:
+        metric = slots.metric.strip().lower()
+        metric = {"count": "listing_count", "数量": "listing_count", "均价": "unit_price",
+                  "单价": "unit_price", "月租金": "monthly_rent", "总价": "total_price"}.get(metric, metric)
+        if metric not in {"listing", "listing_count", "unit_price", "total_price", "monthly_rent"}:
             raise ValueError("Invalid metric slot")
-        result["metric"] = slots.metric
+        result["metric"] = metric
+    if slots.metric_basis is not None:
+        if slots.metric_basis not in {"district_average", "district_listing_max", "ambiguous"}:
+            raise ValueError("Invalid metric basis")
+        result["metric_basis"] = slots.metric_basis
     if slots.listing_type is not None:
-        if slots.listing_type not in {"SALE", "RENT"}:
+        listing_type = slots.listing_type.strip().upper()
+        listing_type = {"出售": "SALE", "销售": "SALE", "在售": "SALE", "出售房源": "SALE",
+                        "出租": "RENT", "租赁": "RENT", "出租房源": "RENT"}.get(listing_type, listing_type)
+        if listing_type not in {"SALE", "RENT"}:
             raise ValueError("Invalid listing type")
-        result["listing_type"] = slots.listing_type
+        result["listing_type"] = listing_type
+    if slots.row_granularity is not None:
+        granularity = slots.row_granularity.strip().lower()
+        granularity = {"房源": "listing", "明细": "listing", "区县": "district", "区域": "district"}.get(granularity, granularity)
+        if granularity not in {"listing", "district"}:
+            raise ValueError("Invalid row granularity")
+        result["row_granularity"] = granularity
     for field in ("bedroom_count", "living_room_count"):
         value = getattr(slots, field)
         if value is not None:
@@ -168,6 +222,9 @@ def _new_context() -> dict[str, Any]:
         "districts": [],
         "listing_type": None,
         "metric": None,
+        "metric_basis": None,
+        "row_granularity": None,
+        "requested_scope": None,
         "bedroom_count": None,
         "living_room_count": None,
         "start_month": None,
@@ -197,7 +254,9 @@ def _render_standalone(context: dict[str, Any]) -> str:
         context.get("listing_type"), "房源"
     )
     metric_text = {
-        "monthly_rent": "平均月租金",
+        "monthly_rent": ("区内单套房源最高月租金" if context.get("metric_basis") == "district_listing_max"
+                         else "各区平均月租金" if context.get("metric_basis") == "district_average"
+                         else "月租金"),
         "unit_price": "平均挂牌单价",
         "total_price": "平均挂牌总价",
         "listing_count": "挂牌数量",
@@ -214,6 +273,9 @@ def _render_standalone(context: dict[str, Any]) -> str:
         if context.get("end_month"):
             time_text += f"到{context['end_month']}"
     intent = context.get("intent")
+    if context.get("row_granularity") == "listing" and context.get("ranking_limit"):
+        metric_label = "挂牌单价" if context.get("metric") == "unit_price" else metric_text
+        return f"列出{location_text}{listing_text}按{metric_label}降序的前{context['ranking_limit']}条房源明细，包含社区和{metric_label}{room_text}{time_text}。"
     if intent == "comparison":
         return f"比较{location_text or '指定地区'}{listing_text}的{metric_text}{room_text}{time_text}。"
     if intent == "ranking":

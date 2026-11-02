@@ -8,7 +8,7 @@ ARG PIP_INDEX_URL=https://pypi.org/simple
 
 WORKDIR /app
 
-RUN groupadd --system agent && useradd --system --gid agent agent
+RUN groupadd --system agent && useradd --system --gid agent --home-dir /home/agent --create-home agent
 
 COPY pyproject.toml ./
 
@@ -20,7 +20,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 COPY app ./app
 
 RUN python -m pip install --no-deps . && \
-    mkdir -p /data/checkpoints && chown -R agent:agent /data
+    mkdir -p /data/checkpoints /tmp/fastembed_cache && \
+    chown -R agent:agent /data /tmp/fastembed_cache
 
 USER agent
 

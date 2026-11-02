@@ -15,5 +15,11 @@ dist/
 # Local runtime data
 data/*
 !data/house_listings.csv
+!data/RAG/
+data/RAG/*
+!data/RAG/official_html/
+!data/RAG/normalized/
 agent-service/data/
 evaluation-results/
+agent-service/evaluation/runs/
+performance-results/
