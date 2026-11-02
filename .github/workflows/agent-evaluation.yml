@@ -21,7 +21,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install Agent test dependencies
-        run: python -m pip install -e './agent-service[dev]'
+        run: python -m pip install -e './agent-service[dev]' -r agent-service/requirements-policy.txt
       - name: Run fast offline pytest suite
         env:
           PYTHONPATH: agent-service

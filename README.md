@@ -386,7 +386,7 @@ Python 测试覆盖 Agent 工作流分支、RAG 召回、SQL 安全边界、图�
 
 ```powershell
 Set-Location agent-service
-python -m pip install -e '.[dev]'
+python -m pip install -e '.[dev]' -r requirements-policy.txt
 # PR 快速集：unit、api、evaluation；无需 API Key 或运行中的服务
 python -m pytest -q -m 'not integration' tests --junitxml=artifacts/pytest-fast.xml
 # 全量：增加本地 MCP 子进程集成测试
