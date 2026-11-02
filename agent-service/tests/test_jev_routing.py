@@ -8,12 +8,13 @@ from app.agents.jev_router import (
     INTENT_CRITERIA, SCOPE_CRITERIA, EXPLICIT_IMPORT_CRITERIA, JevRoutingClient, JevUnavailable,
     RouteSuggestion, parse_route_response,
 )
-from app.agents.routing_policy import decide_route, review_reason
+from app.agents.routing_policy import decide_route, inherit_followup_route, review_reason
 from app.agents.conversation import validate_question_slots
 from app.schemas.chat import QuestionSlots
 
 
 def scope_for(intent, source):
+    if source == "policy": return "policy"
     if source == "none": return "none"
     if source == "mysql": return "current_listing"
     return "import_quality" if intent == "data_quality" else "active_import"
@@ -50,6 +51,42 @@ def test_all_query_intents_have_fixed_views(intent, source, table):
     decision = decide_route(intent, suggestion.scope, hive_available=True, multiple_tasks=False,
                             has_history=False, depends_on_previous=False)
     assert decision.tables == (table,) and decision.source == source
+
+
+def test_jev_policy_and_combined_routes():
+    policy = parse_route_response(answer_payload("policy", "policy"))
+    assert review_reason(policy, threshold=0.7, noul_margin=0.15) is None
+    assert decide_route(policy.intent, policy.scope, hive_available=False, multiple_tasks=False,
+        has_history=False, depends_on_previous=False).source == "policy"
+    combined = parse_route_response(answer_payload("policy_listing", "mysql"))
+    assert review_reason(combined, threshold=0.7, noul_margin=0.15) is None
+    decision = decide_route(combined.intent, combined.scope, hive_available=False, multiple_tasks=True,
+        has_history=False, depends_on_previous=False)
+    assert decision.source == "mysql" and decision.tables == ("v_agent_house_listing",)
+    imported = decide_route("policy_listing", "active_import", hive_available=True,
+        multiple_tasks=True, has_history=False, depends_on_previous=False)
+    assert imported.source == "hive" and imported.tables == ("v_agent_house_info_analysis",)
+    unavailable = decide_route("policy_listing", "active_import", hive_available=False,
+        multiple_tasks=False, has_history=False, depends_on_previous=False)
+    assert unavailable.needs_clarification and unavailable.source == "none"
+
+
+def test_followup_inherits_prior_task_and_listing_granularity():
+    previous = {"previous_question": "北京朝阳区出售房源有多少条", "intent": "aggregation",
+                "requested_scope": "current_listing"}
+    assert inherit_followup_route("那北京海淀区呢？", previous, "clarify", "none", False) == (
+        "aggregation", "current_listing", True)
+    combined = {**previous, "intent": "policy_listing"}
+    assert inherit_followup_route("再比较海淀区，并沿用上一问的装修提取政策。",
+        combined, "comparison", "current_listing", False) == ("policy_listing", "current_listing", True)
+    imported = {**previous, "requested_scope": "active_import"}
+    assert inherit_followup_route("那出租房源呢？", imported, "clarify", "none", False) == (
+        "aggregation", "active_import", True)
+    assert inherit_followup_route("那出租房源呢？", imported, "aggregation", "current_listing", True) == (
+        "aggregation", "active_import", True)
+    detail = decide_route("ranking", "current_listing", hive_available=True,
+        multiple_tasks=False, has_history=True, depends_on_previous=True, row_granularity="listing")
+    assert detail.tables == ("v_agent_house_listing",)
 
 
 def test_non_query_and_hive_capability_policy():
@@ -180,8 +217,11 @@ def test_model_slots_are_normalized_and_range_checked():
     slots = validate_question_slots(QuestionSlots(cities=["上海"], districts=["浦东"],
         metric="monthly_rent", bedroom_count=3, start_month="2026-01"))
     assert slots["cities"] == ["上海市"] and slots["districts"] == ["浦东新区"]
+    recovered = validate_question_slots(QuestionSlots(listing_type="出租房源", metric="数量", row_granularity="明细"))
+    assert recovered == {"metric": "listing_count", "listing_type": "RENT", "row_granularity": "listing"}
     for invalid in (QuestionSlots(metric="made_up"), QuestionSlots(ranking_limit=101),
-                    QuestionSlots(start_month="2026-13"), QuestionSlots(cities=["a' OR 1=1"])):
+                    QuestionSlots(start_month="2026-13"), QuestionSlots(cities=["a' OR 1=1"]),
+                    QuestionSlots(listing_type="BUY_OR_RENT"), QuestionSlots(row_granularity="random")):
         with pytest.raises(ValueError):
             validate_question_slots(invalid)
 

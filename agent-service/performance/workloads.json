@@ -1,0 +1,10 @@
+{
+  "dataset": "SYNTHETIC_CSV_V1_5000 / reviewed20 2026-10-30",
+  "workloads": {
+    "health": {"case_id": null, "question": null, "expected_source": null, "requires_hive": false, "assertions": {}},
+    "sql_mysql": {"case_id": "BLD13", "question": "北京朝阳和海淀区项目挂牌出售样本的数量各是多少？", "expected_source": "mysql", "requires_hive": false, "assertions": {"row_count_min": 2, "answer_any": ["朝阳", "海淀"], "successful_queries": 1}},
+    "sql_hive": {"case_id": "BLD14", "question": "当前激活 CSV 导入数据里，深圳出租样本有多少条？", "expected_source": "hive", "requires_hive": true, "assertions": {"answer_all": ["深圳", "1250"], "successful_queries": 1}},
+    "rag": {"case_id": "BLD08", "question": "2025 年第 565 号公报的公积金条款现在能直接引用吗？", "expected_source": "policy", "requires_hive": false, "assertions": {"evidence_min": 1, "answer_any": ["565", "25%"], "successful_queries": 0}},
+    "mixed": {"case_id": "BLD16", "question": "北京海淀区项目出售样本平均单价是多少？同时列出家庭第二套住房契税所收录的原文。", "expected_source": "mysql", "requires_hive": false, "assertions": {"answer_all": ["海淀", "83067", "家庭第二套住房"], "evidence_min": 1, "successful_queries": 1}}
+  }
+}

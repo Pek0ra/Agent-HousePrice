@@ -1,0 +1,12 @@
+{"question":"京建发〔2026〕400号夫妻双方缴存首套公积金贷款最高多少万元？","gold_version":"bj-housing-2026-400","gold_text":"240万元","as_of":"2026-10-22","kind":"exact"}
+{"question":"首套房140平方米以上契税税率是多少？","gold_version":"tax-2024-16","gold_text":"1.5%","kind":"exact"}
+{"question":"第二套住房140平方米以上契税多少？","gold_version":"tax-2024-16","gold_text":"2%","kind":"similar"}
+{"question":"2024年10月1日非京籍家庭买五环内住房需要连续缴纳几年社保？","gold_version":"bj-housing-2024-400-web","gold_text":"3年及以上","as_of":"2024-10-01","kind":"historical"}
+{"question":"京建发〔2024〕218号哪天施行？","gold_version":"bj-housing-2024-218","gold_text":"次日起施行","kind":"date"}
+{"question":"出售旧房后一年内换购新住房的个税退税条件是什么？","gold_version":"tax-2026-3","gold_text":"1年内","kind":"paraphrase"}
+{"question":"2026年8月北京装修提取公积金最多多少？","gold_version":"bj-housing-2026-400","gold_text":"25万元","as_of":"2026-08-09","kind":"exact"}
+{"question":"2025年5月8日新发放五年以上首套公积金贷款利率是多少？","gold_version":"bj-gjj-rate-2025-05-08","gold_text":"2.6％","kind":"exact_unknown_effective"}
+{"question":"2024年10月之前本市户籍二孩家庭首套认定如何调整？","gold_version":"bj-housing-2024-218","gold_text":"二孩及以上","as_of":"2024-09-20","kind":"historical"}
+{"question":"2025年12月24日京建发〔2025〕565号公积金二套首付是多少？","gold_version":null,"gold_text":null,"as_of":"2025-12-24","kind":"unreviewed"}
+{"question":"外星人在北京买房有特殊优惠吗？","gold_version":null,"gold_text":null,"kind":"no_answer"}
+{"question":"列出项目CSV的朝阳区合成房源并结合首套契税政策","gold_version":"tax-2024-16","gold_text":"家庭唯一住房","kind":"combined"}

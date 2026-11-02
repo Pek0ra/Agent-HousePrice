@@ -1,0 +1,16 @@
+{
+  "cases": 20,
+  "http_200": 20,
+  "source_match": 20,
+  "sql_executed": 10,
+  "sql_cases": 10,
+  "result_counts": {
+    "通过": 11,
+    "部分通过": 4,
+    "未通过": 5
+  },
+  "mean_ms": 8517,
+  "p95_ms": 14305,
+  "gold_file": "human_annotation_reviewed.csv",
+  "raw_file": "new20_reviewed_2026-10-30.jsonl"
+}

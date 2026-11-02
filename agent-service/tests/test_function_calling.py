@@ -12,6 +12,7 @@ from app.config import Settings
 from app.database.hive import HIVE_ALLOWED_COLUMNS
 from app.database.mysql import ALLOWED_COLUMNS
 from app.schemas.chat import QuestionSlots
+from app.tools import build_tool_registry
 
 
 SQL = "SELECT unit_price FROM v_agent_house_listing"
@@ -83,8 +84,13 @@ def agent(tmp_path, replies, *, database=None, hive=None, jev=None, **limits):
     audit = Audit()
     settings = Settings(openai_api_key="test", checkpoint_db_path=str(tmp_path / "checkpoint.sqlite"),
                         big_data_enabled=hive is not None, **limits)
-    instance = MysqlNaturalLanguageAgent(settings, database=database or Database(),
-        hive_database=hive, model=model, audit_repository=audit, jev_client=jev or StaticJev())
+    db = database or Database()
+    def factory(source, tables):
+        return build_tool_registry(settings=settings, source=source, selected_tables=tables,
+            mysql_database=db, hive_database=hive)
+    instance = MysqlNaturalLanguageAgent(settings, database=db,
+        hive_database=hive, model=model, audit_repository=audit,
+        jev_client=jev or StaticJev(), mcp_client_factory=factory)
     return instance, model, audit
 
 
@@ -189,11 +195,12 @@ def test_successful_query_cannot_be_executed_twice(tmp_path):
     db = Database()
     service, model, _ = agent(tmp_path, [
         call("query_mysql_readonly", {"sql": SQL}, 1),
-        call("query_mysql_readonly", {"sql": SQL}, 2),
+        call("query_mysql_readonly", {"sql": "SELECT COUNT(*) FROM v_agent_house_listing"}, 2),
         AIMessage(content="挂牌样本查询完成。")], database=db)
     response = service.ask("上海房价是多少？")
     assert response.details.successful_queries == 1
     assert len(db.executed) == 1
+    assert response.sql == db.executed[0]
     errors = [json.loads(message.content) for message in model.seen[-1] if isinstance(message, ToolMessage)]
     assert errors[-1]["error"]["code"] == "unavailable"
 
@@ -204,6 +211,8 @@ def test_bind_tools_incompatibility_is_explicit(tmp_path):
     model = NoToolsModel([])
     settings = Settings(openai_api_key="test", checkpoint_db_path=str(tmp_path / "checkpoint.sqlite"))
     service = MysqlNaturalLanguageAgent(settings, database=Database(), model=model,
-        audit_repository=Audit(), jev_client=StaticJev())
+        audit_repository=Audit(), jev_client=StaticJev(),
+        mcp_client_factory=lambda source, tables: build_tool_registry(settings=settings,
+            source=source, selected_tables=tables, mysql_database=Database()))
     with pytest.raises(AgentNotConfiguredError, match="工具调用"):
         service.ask("上海房价是多少？")

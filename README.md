@@ -386,9 +386,28 @@ Python 测试覆盖 Agent 工作流分支、RAG 召回、SQL 安全边界、图�
 
 ```powershell
 Set-Location agent-service
-.\.venv\Scripts\Activate.ps1
-python -m pytest -q
+python -m pip install -e '.[dev]'
+# PR 快速集：unit、api、evaluation；无需 API Key 或运行中的服务
+python -m pytest -q -m 'not integration' tests --junitxml=artifacts/pytest-fast.xml
+# 全量：增加本地 MCP 子进程集成测试
+python -m pytest -q tests --junitxml=artifacts/pytest-all.xml
+# 仅本地 MCP 集成测试
+python -m pytest -q -m integration tests
 ```
+
+测试以 `unit`、`api`、`integration`、`evaluation` marker 分类，保留现有平铺目录。`integration` 使用本地测试夹具启动 MCP 子进程，不连接开发机服务或真实数据库。测试通过临时目录与替身隔离模型、数据库和 HTTP 依赖；首次安装项目依赖可能需要较长时间。
+
+在仓库根目录运行审核版 20 题的历史响应回放（不调用模型，不产生模型费用）：
+
+```powershell
+$env:PYTHONPATH = 'agent-service'
+python -m app.evaluation.reviewed20 validate
+python -m app.evaluation.reviewed20 score --raw agent-service/tests/data/reviewed20_replay.jsonl --output eval-local
+```
+
+回放生成 `summary.json`、`report.md`、`scored.jsonl` 等报告。HTTP 200 仅说明请求成功，业务结论仍按证据和标准评分，部分语义判断保留人工审核。真实 20 题运行 `python -m app.evaluation.reviewed20 all --endpoint https://<可访问服务>/api/v1/chat --output live-result`；服务需有模型密钥、数据库和政策检索等依赖，会发起真实模型调用并产生费用，费用取决于服务模型及 Token 用量。GitHub Actions 仅在手动选择 `live_20` 时运行真实请求，普通 PR 只运行快速测试与冻结响应回放。
+
+CI 的 `Agent fast tests and replay` 检查会上传 JUnit XML 和回放报告；测试失败保持红色，报告上传仍执行。JUnit 文件缺失会使上传步骤失败；回放报告缺失由上传步骤警告，但回放命令本身失败仍使检查失败。要禁止失败 PR 合并，仓库管理员需在 **Settings → Rules → Rulesets**（或 **Branches → Branch protection rule**）为目标分支启用要求状态检查，并把 `Agent fast tests and replay` 设为 required status check；仅提交工作流 YAML 不会自动启用合并限制。
 
 Java 测试基于 H2 和测试夹具，覆盖应用启动、房源 CRUD、统计、CSV 校验、导入状态机和分析接口：
 
